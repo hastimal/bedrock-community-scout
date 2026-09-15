@@ -139,7 +139,7 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
     - _Requirements: 7.1, 7.2, 7.4, 7.5_
 
 - [x] 9. Implement the Event Aggregator
-  - [-] 9.1 Create `src/pipeline/aggregator.py`
+  - [x] 9.1 Create `src/pipeline/aggregator.py`
     - Implement `aggregate(tool_results: list[list[CommonEvent] | ToolError]) -> tuple[list[CommonEvent], list[ToolError]]`
     - Flatten all `list[CommonEvent]` results into a single list (preserving `source_invocation_order`)
     - Collect all `ToolError` entries into a separate list
@@ -151,8 +151,8 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
     - Verify that all CommonEvent records returned by successful EventSourceTools are included in the aggregated result
     - `# Feature: community-scout-austin, Property 11: all events from all successful tools are aggregated`
 
-- [ ] 10. Implement the Response Generator
-  - [ ] 10.1 Create `src/pipeline/response_generator.py`
+- [x] 10. Implement the Response Generator
+  - [x] 10.1 Create `src/pipeline/response_generator.py`
     - Implement `format_response(ranked_events: list[RankedEvent], context: QueryContext, errors: list[ToolError]) -> str`
     - Emit total event count (post-deduplication) at the top
     - List all events sequentially in a single ranked list for Austin, Texas
@@ -170,8 +170,8 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
     - Non-empty errors → failure footer present
     - _Requirements: 8.1, 8.3, 8.4, 8.5_
 
-- [ ] 11. Implement query validation helpers
-  - [ ] 11.1 Create `src/validation.py`
+- [x] 11. Implement query validation helpers
+  - [x] 11.1 Create `src/validation.py`
     - Implement `validate_query(raw: str) -> None | str` returning an error message string when: input is empty or whitespace-only; extracted topics are missing; extracted topics exceed 10
     - Implement `validate_time_window(start: str, end: str) -> tuple[str, str]` that rejects windows exceeding 5 years and falls back to the default 90-day window with an informational note
     - _Requirements: 1.5, 1.6_
