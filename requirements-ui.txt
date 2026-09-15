@@ -1,0 +1,14 @@
+# UI / development dependencies for the Community Scout demo GUI.
+#
+# These are for running the local Streamlit demo (ui/app.py) ONLY. They are
+# deliberately kept OUT of the AgentCore Runtime deployment artifact: the Runtime
+# packaging (scripts/package-runtime.sh) builds from requirements.txt, so Streamlit
+# is not shipped to the Runtime.
+#
+# Install with:  pip install -r requirements.txt -r requirements-ui.txt
+
+# Base application/runtime dependencies (boto3 for the AgentCore data-plane client).
+-r requirements.txt
+
+# Streamlit demo UI.
+streamlit==1.63.0

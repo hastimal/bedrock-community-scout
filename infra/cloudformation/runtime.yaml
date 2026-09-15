@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Community Scout (Austin) — Amazon Bedrock AgentCore Runtime (direct code
+  deployment) for the existing Scout application. Deploys the packaged Python
+  application (BedrockAgentCoreApp in src/scout.py, exposed via the root-level
+  runtime_entrypoint.py) from an S3 ZIP artifact, with a least-privilege execution
+  role. This template does NOT modify the existing Gateway or any application/search
+  behavior. Region: us-east-1.
+
+Parameters:
+  CodeS3Bucket:
+    Type: String
+    Description: Name of the S3 bucket holding the direct-code ZIP artifact.
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+
+  CodeS3Key:
+    Type: String
+    Description: S3 object key (path) of the direct-code ZIP artifact.
+    MinLength: 1
+    Default: community-scout-runtime.zip
+
+  GatewayUrl:
+    Type: String
+    Description: >
+      MCP endpoint URL of the existing AgentCore Gateway. Supplied at deploy time and
+      exposed to the app as AGENTCORE_WEB_SEARCH_GATEWAY_URL.
+    Default: "https://community-scout-gateway-ulm0mt55tz.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+
+  BedrockModelId:
+    Type: String
+    Description: Bedrock foundation model ID used for reasoning and tool invocation.
+    Default: us.anthropic.claude-sonnet-4-6
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # (3) Least-privilege IAM execution role for the AgentCore Runtime.
+  #
+  # The Runtime assumes this role to run the application. The trust policy restricts
+  # assumption to the AgentCore service in THIS account/region (SourceAccount +
+  # SourceArn) to prevent the confused-deputy problem. Permissions are scoped to only
+  # what the application needs: invoke the Bedrock model, invoke the existing Gateway,
+  # write its own CloudWatch Logs, and read the direct-code artifact from S3.
+  # ---------------------------------------------------------------------------
+  RuntimeExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Least-privilege execution role for the Community Scout AgentCore Runtime.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowAgentCoreRuntimeToAssumeRole
+            Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*"
+      Policies:
+        - PolicyName: community-scout-runtime-permissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # --- Bedrock model invocation (reasoning + tool-use loop) --------- #
+              # Scoped to the configured model. Both the cross-region inference
+              # profile (us.anthropic.*) and the underlying foundation model ARNs
+              # are required because a system-defined inference profile routes to
+              # regional foundation models. The US cross-region profile
+              # (us.anthropic.*) can route to us-east-1, us-east-2, and us-west-2, and
+              # the account-scoped inference-profile ARN exists in each of those
+              # regions, so the inference-profile ARN must NOT be pinned to a single
+              # region (the deployed Runtime was denied when routed to us-west-2).
+              - Sid: InvokeBedrockModel
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/${BedrockModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6*"
+              # --- Invoke the existing Gateway (Web Search MCP connector) ------- #
+              - Sid: InvokeCommunityScoutGateway
+                Effect: Allow
+                Action: bedrock-agentcore:InvokeGateway
+                Resource: "arn:aws:bedrock-agentcore:us-east-1:155079498937:gateway/community-scout-gateway-ulm0mt55tz"
+              # --- CloudWatch Logs required by AgentCore Runtime --------------- #
+              - Sid: RuntimeCloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                  - logs:DescribeLogGroups
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*"
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*:*"
+              # --- AgentCore Runtime observability: log resource policy -------- #
+              # Runtime observability requires logs:PutResourcePolicy to allow the
+              # service to attach a resource policy to its log delivery. Scoped to the
+              # Community Scout runtime log-group pattern.
+              - Sid: RuntimeObservabilityLogResourcePolicy
+                Effect: Allow
+                Action:
+                  - logs:PutResourcePolicy
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*"
+              # --- AgentCore Runtime observability: X-Ray tracing -------------- #
+              # X-Ray trace/telemetry submission and sampling APIs do not support
+              # resource-level scoping and require "*" per AWS documentation.
+              - Sid: RuntimeObservabilityXRay
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: "*"
+              # --- AgentCore Runtime observability: CloudWatch metrics --------- #
+              # PutMetricData has no resource ARN; restrict to the bedrock-agentcore
+              # metric namespace via a condition.
+              - Sid: RuntimeObservabilityMetrics
+                Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: bedrock-agentcore
+              # --- Read the direct-code ZIP artifact from S3 ------------------- #
+              # AgentCore Runtime reads the packaged code artifact from S3 during
+              # provisioning; scope to the specific artifact object.
+              - Sid: ReadDirectCodeArtifact
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${CodeS3Bucket}/${CodeS3Key}"
+
+  # ---------------------------------------------------------------------------
+  # (1) AgentCore Runtime — direct code deployment from the S3 ZIP artifact.
+  # ---------------------------------------------------------------------------
+  ScoutRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    Properties:
+      AgentRuntimeName: community_scout_runtime
+      Description: Community Scout Austin — Strands/Claude agent hosted on AgentCore Runtime.
+      RoleArn: !GetAtt RuntimeExecutionRole.Arn
+      # MCP-serving app inbound protocol is HTTP (the @app.entrypoint handler).
+      NetworkConfiguration:
+        NetworkMode: PUBLIC
+      AgentRuntimeArtifact:
+        CodeConfiguration:
+          Runtime: PYTHON_3_12
+          # Root-level entry-point adapter that re-exposes src/scout.py's app.
+          EntryPoint:
+            - runtime_entrypoint.py
+          Code:
+            S3:
+              Bucket: !Ref CodeS3Bucket
+              Prefix: !Ref CodeS3Key
+      EnvironmentVariables:
+        AGENTCORE_WEB_SEARCH_GATEWAY_URL: !Ref GatewayUrl
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        AWS_REGION: us-east-1
+
+Outputs:
+  RuntimeArn:
+    Description: ARN of the Community Scout AgentCore Runtime.
+    Value: !GetAtt ScoutRuntime.AgentRuntimeArn
+    Export:
+      Name: !Sub "${AWS::StackName}-RuntimeArn"
+
+  RuntimeId:
+    Description: Identifier of the Community Scout AgentCore Runtime.
+    Value: !GetAtt ScoutRuntime.AgentRuntimeId
+    Export:
+      Name: !Sub "${AWS::StackName}-RuntimeId"
+
+  RuntimeRoleArn:
+    Description: ARN of the Runtime's least-privilege execution role.
+    Value: !GetAtt RuntimeExecutionRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-RuntimeRoleArn"
+
+  RuntimeVersion:
+    Description: Version of the AgentCore Runtime.
+    Value: !GetAtt ScoutRuntime.AgentRuntimeVersion
