@@ -139,7 +139,7 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
     - _Requirements: 7.1, 7.2, 7.4, 7.5_
 
 - [x] 9. Implement the Event Aggregator
-  - [x] 9.1 Create `src/pipeline/aggregator.py`
+  - [-] 9.1 Create `src/pipeline/aggregator.py`
     - Implement `aggregate(tool_results: list[list[CommonEvent] | ToolError]) -> tuple[list[CommonEvent], list[ToolError]]`
     - Flatten all `list[CommonEvent]` results into a single list (preserving `source_invocation_order`)
     - Collect all `ToolError` entries into a separate list

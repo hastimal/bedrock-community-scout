@@ -22,6 +22,8 @@ the user which sources could not be retrieved and why. This module has no
 external dependencies and makes no LLM calls.
 """
 
+from __future__ import annotations
+
 from src.models.events import CommonEvent, ToolError
 
 
