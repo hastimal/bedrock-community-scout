@@ -260,6 +260,49 @@
         "chatSessionId": "sess_8d91a4a9-9c93-4a05-b010-125ceaa0b980",
         "timestamp": 1789453993901
       }
+    ],
+    "15.1 Write end-to-end integration test with mocked tool responses": [
+      {
+        "executionId": "aaf3e3a1-7039-486d-8566-f1dd64539fe3",
+        "chatSessionId": "sess_1c4895b2-9b82-4266-96cf-3d32316e287e",
+        "timestamp": 1789454043162
+      },
+      {
+        "executionId": "aaf3e3a1-7039-486d-8566-f1dd64539fe3",
+        "chatSessionId": "sess_1c4895b2-9b82-4266-96cf-3d32316e287e",
+        "timestamp": 1789454209484
+      }
+    ],
+    "15.2 Write integration test for AgentCore tool timeout": [
+      {
+        "executionId": "6a58d277-5d3f-4c43-80e2-90464d5b32ec",
+        "chatSessionId": "sess_f85be66a-e22c-4a0d-91c3-1a9694f7adda",
+        "timestamp": 1789454220928
+      },
+      {
+        "executionId": "6a58d277-5d3f-4c43-80e2-90464d5b32ec",
+        "chatSessionId": "sess_f85be66a-e22c-4a0d-91c3-1a9694f7adda",
+        "timestamp": 1789454351319
+      }
+    ],
+    "15.4 Write integration test for zero results": [
+      {
+        "executionId": "64d0156e-9027-4bdc-aef0-a571d08e9e9d",
+        "chatSessionId": "sess_ddbbe4b3-ddb8-4398-9679-2d23cf69bfc3",
+        "timestamp": 1789454399682
+      },
+      {
+        "executionId": "64d0156e-9027-4bdc-aef0-a571d08e9e9d",
+        "chatSessionId": "sess_ddbbe4b3-ddb8-4398-9679-2d23cf69bfc3",
+        "timestamp": 1789454494307
+      }
+    ],
+    "15. Implement integration tests": [
+      {
+        "executionId": "64d0156e-9027-4bdc-aef0-a571d08e9e9d",
+        "chatSessionId": "sess_ddbbe4b3-ddb8-4398-9679-2d23cf69bfc3",
+        "timestamp": 1789454494340
+      }
     ]
   }
 }

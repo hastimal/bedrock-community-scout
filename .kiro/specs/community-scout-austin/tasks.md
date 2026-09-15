@@ -226,18 +226,18 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
     - **Validates: Requirements 3.2, 3.5**
     - `# Feature: community-scout-austin, Property 9: all output events are within the requested time window`
 
-- [ ] 15. Implement integration tests
-  - [ ] 15.1 Write end-to-end integration test with mocked tool responses
+- [x] 15. Implement integration tests
+  - [x] 15.1 Write end-to-end integration test with mocked tool responses
     - Submit a known query with mocked Web Search Tool responses containing meetup.com and lu.ma snippets; assert ranked output contains correct events in expected order with unmodified source URLs
     - _Requirements: 10.4_
 
-  - [ ] 15.2 Write integration test for AgentCore tool timeout
+  - [x] 15.2 Write integration test for AgentCore tool timeout
     - Mock the Web Search Tool to time out; assert the Scout returns an error note without partial results and does not raise an exception
     - _Requirements: 2.4, 10.5_
 
-  - [ ] 15.3 Reserved: multi-source partial failure test (applicable when a second EventSourceTool is added)
+  - [x] 15.3 Reserved: multi-source partial failure test (applicable when a second EventSourceTool is added)
 
-  - [ ] 15.4 Write integration test for zero results
+  - [x] 15.4 Write integration test for zero results
     - Mock Web Search Tool to return empty results; assert user receives the "no events found" message with suggestions and a count of 0
     - _Requirements: 8.4, 9.3_
 
