@@ -86,6 +86,70 @@
         "chatSessionId": "sess_f4dc5e9d-db95-4263-bed4-2ae86d2dc736",
         "timestamp": 1789451988527
       }
+    ],
+    "6. Checkpoint — core tools ready": [
+      {
+        "executionId": "f3090b5a-f440-4bd1-a443-697b37eeea33",
+        "chatSessionId": "sess_c9a092bd-370e-43e4-b471-b639817c84d4",
+        "timestamp": 1789452429365
+      }
+    ],
+    "7.1 Create `src/pipeline/deduplicator.py`": [
+      {
+        "executionId": "9bac8fd3-d021-4f74-af0b-51357608f17d",
+        "chatSessionId": "sess_d43a6aa9-ad4e-4b46-9340-61e5fb9d0d3e",
+        "timestamp": 1789452482254
+      },
+      {
+        "executionId": "9bac8fd3-d021-4f74-af0b-51357608f17d",
+        "chatSessionId": "sess_d43a6aa9-ad4e-4b46-9340-61e5fb9d0d3e",
+        "timestamp": 1789452556189
+      }
+    ],
+    "7. Implement the Deduplicator": [
+      {
+        "executionId": "9bac8fd3-d021-4f74-af0b-51357608f17d",
+        "chatSessionId": "sess_d43a6aa9-ad4e-4b46-9340-61e5fb9d0d3e",
+        "timestamp": 1789452556223
+      }
+    ],
+    "8.1 Create `src/pipeline/ranker.py`": [
+      {
+        "executionId": "ccd0ee6c-0514-4221-aa00-42eb77949e20",
+        "chatSessionId": "sess_ffe4405b-fbb7-4eef-ae07-23ac31e05bad",
+        "timestamp": 1789452631462
+      },
+      {
+        "executionId": "ccd0ee6c-0514-4221-aa00-42eb77949e20",
+        "chatSessionId": "sess_ffe4405b-fbb7-4eef-ae07-23ac31e05bad",
+        "timestamp": 1789452713838
+      }
+    ],
+    "8. Implement the Ranker": [
+      {
+        "executionId": "ccd0ee6c-0514-4221-aa00-42eb77949e20",
+        "chatSessionId": "sess_ffe4405b-fbb7-4eef-ae07-23ac31e05bad",
+        "timestamp": 1789452713876
+      }
+    ],
+    "9.1 Create `src/pipeline/aggregator.py`": [
+      {
+        "executionId": "ff8d1f01-1a4f-4d4f-bf26-5331e7af7369",
+        "chatSessionId": "sess_c6514e90-3cc8-4cd3-bd1e-95d545918711",
+        "timestamp": 1789452793947
+      },
+      {
+        "executionId": "ff8d1f01-1a4f-4d4f-bf26-5331e7af7369",
+        "chatSessionId": "sess_c6514e90-3cc8-4cd3-bd1e-95d545918711",
+        "timestamp": 1789452866863
+      }
+    ],
+    "9. Implement the Event Aggregator": [
+      {
+        "executionId": "ff8d1f01-1a4f-4d4f-bf26-5331e7af7369",
+        "chatSessionId": "sess_c6514e90-3cc8-4cd3-bd1e-95d545918711",
+        "timestamp": 1789452866898
+      }
     ]
   }
 }

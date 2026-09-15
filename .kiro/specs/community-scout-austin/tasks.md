@@ -76,11 +76,11 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
     - Assert `ToolError` returned on failure with no partial records
     - _Requirements: 3.1, 3.2, 3.5, 3.6, 3.7_
 
-- [ ] 6. Checkpoint — core tools ready
+- [x] 6. Checkpoint — core tools ready
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 7. Implement the Deduplicator
-  - [ ] 7.1 Create `src/pipeline/deduplicator.py`
+- [x] 7. Implement the Deduplicator
+  - [x] 7.1 Create `src/pipeline/deduplicator.py`
     - Implement `deduplicate(events: list[CommonEvent]) -> list[CommonEvent]`
     - Normalize keys: strip + lowercase `title` and `city`; use date portion only of `start_datetime`
     - Group events by `(normalized_title, start_date, normalized_city)`, sort each group by `match_confidence DESC, source_invocation_order ASC`, and retain the first record
@@ -104,8 +104,8 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
     - Case-insensitive, whitespace-stripped title comparison
     - _Requirements: 6.1, 6.2, 6.3, 6.4_
 
-- [ ] 8. Implement the Ranker
-  - [ ] 8.1 Create `src/pipeline/ranker.py`
+- [x] 8. Implement the Ranker
+  - [x] 8.1 Create `src/pipeline/ranker.py`
     - Implement `rank(events: list[CommonEvent], context: QueryContext) -> list[RankedEvent]`
     - Compute `topic_score = (matched_topics / total_topics) * 80` using case-insensitive substring match of each topic against event title and description
     - Compute `recency_score = max(0, 20 * (1 - days_until_event / 365))`, returning 0 for events >365 days away
@@ -138,8 +138,8 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
     - Two equal-score events → ordered by ascending start date
     - _Requirements: 7.1, 7.2, 7.4, 7.5_
 
-- [ ] 9. Implement the Event Aggregator
-  - [ ] 9.1 Create `src/pipeline/aggregator.py`
+- [x] 9. Implement the Event Aggregator
+  - [x] 9.1 Create `src/pipeline/aggregator.py`
     - Implement `aggregate(tool_results: list[list[CommonEvent] | ToolError]) -> tuple[list[CommonEvent], list[ToolError]]`
     - Flatten all `list[CommonEvent]` results into a single list (preserving `source_invocation_order`)
     - Collect all `ToolError` entries into a separate list
