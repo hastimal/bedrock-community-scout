@@ -1,5 +1,10 @@
 {
-  "pbtResults": {},
+  "pbtResults": {
+    "3.3 Write property test for `normalize_event()` — Property 6": {
+      "status": "passed",
+      "lastRunTimestamp": 1789451564178
+    }
+  },
   "executionHistory": {
     "1. Scaffold project structure and configuration": [
       {
@@ -25,6 +30,42 @@
         "executionId": "f848418c-da1e-4c84-a40b-c48a9a09f91b",
         "chatSessionId": "sess_e58defb8-8119-46d8-bded-6df12dc3fe32",
         "timestamp": 1789450694802
+      }
+    ],
+    "3.1 Define the `EventSourceTool` `Protocol` in `src/tools/interface.py` with the typed call signature `(topics, start_date, end_date) -> list[CommonEvent] | ToolError`": [
+      {
+        "executionId": "ff2715f7-7b55-427a-94cb-ce82ecccff05",
+        "chatSessionId": "sess_eeeee75b-369b-4bb0-ad82-44581d856734",
+        "timestamp": 1789451268776
+      },
+      {
+        "executionId": "ff2715f7-7b55-427a-94cb-ce82ecccff05",
+        "chatSessionId": "sess_eeeee75b-369b-4bb0-ad82-44581d856734",
+        "timestamp": 1789451403341
+      }
+    ],
+    "3.2 Implement `normalize_event()` in `src/tools/normalizer.py`": [
+      {
+        "executionId": "d3dd6939-3d6d-458e-8d86-c42ba2305ed1",
+        "chatSessionId": "sess_18a110d4-835b-43aa-8d62-4ae145f5934b",
+        "timestamp": 1789451411146
+      },
+      {
+        "executionId": "d3dd6939-3d6d-458e-8d86-c42ba2305ed1",
+        "chatSessionId": "sess_18a110d4-835b-43aa-8d62-4ae145f5934b",
+        "timestamp": 1789451525298
+      }
+    ],
+    "3.3 Write property test for `normalize_event()` — Property 6": [
+      {
+        "executionId": "b82b933c-8f4a-4174-851d-9985daeeb3fc",
+        "chatSessionId": "sess_e9e69b81-84ac-493e-bbbb-06b04ec9fcba",
+        "timestamp": 1789451531505
+      },
+      {
+        "executionId": "b82b933c-8f4a-4174-851d-9985daeeb3fc",
+        "chatSessionId": "sess_e9e69b81-84ac-493e-bbbb-06b04ec9fcba",
+        "timestamp": 1789451571872
       }
     ]
   }

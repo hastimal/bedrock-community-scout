@@ -25,12 +25,12 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
     - Verify optional `end_datetime` accepts `None`
     - _Requirements: 5.1, 5.3_
 
-- [ ] 3. Implement the Event Source Tool interface and normalizer
-  - [ ] 3.1 Define the `EventSourceTool` `Protocol` in `src/tools/interface.py` with the typed call signature `(topics, start_date, end_date) -> list[CommonEvent] | ToolError`
+- [x] 3. Implement the Event Source Tool interface and normalizer
+  - [x] 3.1 Define the `EventSourceTool` `Protocol` in `src/tools/interface.py` with the typed call signature `(topics, start_date, end_date) -> list[CommonEvent] | ToolError`
     - Austin, Texas is fixed internally for v0.1 and must not be passed as a caller-supplied parameter
     - _Requirements: 2.1_
 
-  - [ ] 3.2 Implement `normalize_event()` in `src/tools/normalizer.py`
+  - [x] 3.2 Implement `normalize_event()` in `src/tools/normalizer.py`
     - Accept a raw platform dict and a `source_platform` string
     - Verify presence of all required fields (title, start_datetime, city, source_platform, event_url); if any required field is missing or empty, return `None` (exclude the event)
     - For optional fields (description, end_datetime, location_name), set to `None` when absent from the source
@@ -39,7 +39,7 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
     - Log skipped records with `{platform, event_identifier, missing_required_field}`
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6_
 
-  - [ ] 3.3 Write property test for `normalize_event()` — Property 6
+  - [x] 3.3 Write property test for `normalize_event()` — Property 6
     - **Property 6: Normalization Preserves and Validates Required Fields**
     - **Validates: Requirements 5.1, 5.2, 5.5**
     - `# Feature: community-scout-austin, Property 6: normalization preserves required fields and excludes incomplete records`
