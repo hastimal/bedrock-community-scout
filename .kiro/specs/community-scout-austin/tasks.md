@@ -204,20 +204,20 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
     - > 10 topics → rejection error before tool invocation
     - _Requirements: 1.5, 1.6_
 
-- [ ] 14. Implement cross-pipeline property-based tests
-  - [ ] 14.1 Write property test for URL immutability end-to-end — Property 5
+- [x] 14. Implement cross-pipeline property-based tests
+  - [x] 14.1 Write property test for URL immutability end-to-end — Property 5
     - Generate a list of `CommonEvent` records, run through `deduplicate()` then `rank()`; assert all `event_url` values are byte-for-byte identical to originals
     - **Property 5: CommonEvent URL Immutability**
     - **Validates: Requirements 5.4, 8.5, 9.2**
     - `# Feature: community-scout-austin, Property 5: event_url is unchanged through the pipeline`
 
-  - [ ] 14.2 Write property test for tool failure containment — Property 10
+  - [x] 14.2 Write property test for tool failure containment — Property 10
     - Generate N mock tools where k randomly selected tools raise errors; assert Scout result contains events from (N − k) successful tools and exactly k error entries
     - **Property 10: Tool Failure Containment**
     - **Validates: Requirements 2.5, 11.5**
     - `# Feature: community-scout-austin, Property 10: failed tools are contained without aborting the session`
 
-  - [ ] 14.3 Write property test for time window filtering — Property 9
+  - [x] 14.3 Write property test for time window filtering — Property 9
     - Generate tool invocation parameters and mocked Web Search Tool responses with varied event dates
     - Verify that start_date and end_date are embedded in the Web Search query text
     - Verify that extracted events are deterministically post-filtered using their verified event start_datetime

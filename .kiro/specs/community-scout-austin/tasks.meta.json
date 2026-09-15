@@ -217,6 +217,49 @@
         "chatSessionId": "sess_b4cc3de0-8a11-4807-a5bd-5fa8f13f384e",
         "timestamp": 1789453581622
       }
+    ],
+    "14.1 Write property test for URL immutability end-to-end — Property 5": [
+      {
+        "executionId": "03072755-8ec0-44cc-b573-dfbddcb029ac",
+        "chatSessionId": "sess_f246c73d-3d50-413d-b240-0f7d940ebeaf",
+        "timestamp": 1789453664291
+      },
+      {
+        "executionId": "03072755-8ec0-44cc-b573-dfbddcb029ac",
+        "chatSessionId": "sess_f246c73d-3d50-413d-b240-0f7d940ebeaf",
+        "timestamp": 1789453752247
+      }
+    ],
+    "14.2 Write property test for tool failure containment — Property 10": [
+      {
+        "executionId": "5bb704dc-1243-4992-b0c0-526da4583469",
+        "chatSessionId": "sess_06ce5451-846a-487f-b6ad-dd57341006a8",
+        "timestamp": 1789453763418
+      },
+      {
+        "executionId": "5bb704dc-1243-4992-b0c0-526da4583469",
+        "chatSessionId": "sess_06ce5451-846a-487f-b6ad-dd57341006a8",
+        "timestamp": 1789453858125
+      }
+    ],
+    "14.3 Write property test for time window filtering — Property 9": [
+      {
+        "executionId": "b7aa7d4c-b611-4daf-b9bb-12fd118ff5fb",
+        "chatSessionId": "sess_8d91a4a9-9c93-4a05-b010-125ceaa0b980",
+        "timestamp": 1789453868926
+      },
+      {
+        "executionId": "b7aa7d4c-b611-4daf-b9bb-12fd118ff5fb",
+        "chatSessionId": "sess_8d91a4a9-9c93-4a05-b010-125ceaa0b980",
+        "timestamp": 1789453993847
+      }
+    ],
+    "14. Implement cross-pipeline property-based tests": [
+      {
+        "executionId": "b7aa7d4c-b611-4daf-b9bb-12fd118ff5fb",
+        "chatSessionId": "sess_8d91a4a9-9c93-4a05-b010-125ceaa0b980",
+        "timestamp": 1789453993901
+      }
     ]
   }
 }
