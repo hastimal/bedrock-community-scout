@@ -187,8 +187,8 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
 - [ ] 12. Checkpoint — pipeline components ready
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 13. Implement the Scout Orchestrator and wire all components
-  - [ ] 13.1 Create `src/scout.py`
+- [x] 13. Implement the Scout Orchestrator and wire all components
+  - [x] 13.1 Create `src/scout.py`
     - Instantiate `BedrockAgentCoreApp` and decorate the handler with `@app.entrypoint`
     - Read `model_id` from `config.get_model_id()` at handler invocation time (not at import time)
     - Construct a Strands `Agent` with the system prompt, `model_id`, and `tools=[agentcore_web_search_event_source]`
