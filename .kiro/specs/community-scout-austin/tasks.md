@@ -6,7 +6,7 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
 
 ## Tasks
 
-- [ ] 1. Scaffold project structure and configuration
+- [x] 1. Scaffold project structure and configuration
   - Create the top-level directory layout: `src/`, `src/models/`, `src/tools/`, `src/pipeline/`, `tests/unit/`, `tests/property/`, `tests/integration/`
   - Add `requirements.txt` pinning `boto3`, `strands-agents`, `bedrock-agentcore`, `requests`, `hypothesis`, `pytest`, `pytest-asyncio`
   - Create `.env.example` documenting the only environment variable: `BEDROCK_MODEL_ID` — note explicitly: "No API keys or OAuth credentials needed. Both meetup.com and lu.ma are accessed via the AgentCore Web Search Tool."
