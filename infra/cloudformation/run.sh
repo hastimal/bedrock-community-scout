@@ -1,18 +1,18 @@
-1. Run
+#1. Run
 aws cloudformation describe-stacks \
   --stack-name community-scout-gateway \
   --region us-east-1 \
   --query 'Stacks[0].Outputs' \
   --output table
 
-2. Verify the stack status too:
+#2. Verify the stack status too:
 aws cloudformation describe-stacks \
   --stack-name community-scout-gateway \
   --region us-east-1 \
   --query 'Stacks[0].StackStatus' \
   --output text
 
-3. let's retrieve the IDs cleanly rather than copying them manually.
+#3. let's retrieve the IDs cleanly rather than copying them manually.
 GATEWAY_ID=$(aws cloudformation describe-stacks \
   --stack-name community-scout-gateway \
   --region us-east-1 \
@@ -29,14 +29,14 @@ echo "Gateway: $GATEWAY_ID"
 echo "Target:  $TARGET_ID"
 
 
-4. verify both real AgentCore resources:
+#4. verify both real AgentCore resources:
 aws bedrock-agentcore-control get-gateway \
   --gateway-identifier "$GATEWAY_ID" \
   --region us-east-1 \
   --query '{Name:name,Status:status,Url:gatewayUrl}' \
   --output table
 
-and 
+#and 
 
 aws bedrock-agentcore-control get-gateway-target \
   --gateway-identifier "$GATEWAY_ID" \
@@ -45,5 +45,7 @@ aws bedrock-agentcore-control get-gateway-target \
   --query '{Name:name,Status:status,TargetId:targetId}' \
   --output table
 
-  
-5. 
+
+#5. Run?
+
+python -m pip install -U mcp-proxy-for-aws

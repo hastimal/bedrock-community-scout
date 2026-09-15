@@ -39,6 +39,7 @@ establish or maintain, the handler yields an error message and returns no partia
 results.
 """
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -98,10 +99,13 @@ app = BedrockAgentCoreApp()
 LOCATION = "Austin, Texas"
 
 
-#: System prompt driving the LLM tool-use loop. It instructs the model to interpret
-#: the query, invoke the domain-filtered Web Search event source, extract structured
-#: events from the returned snippets, and never fabricate any event fact.
-SYSTEM_PROMPT = f"""\
+#: Base system prompt driving the LLM tool-use loop. It instructs the model to
+#: interpret the query, invoke the domain-filtered Web Search event source, extract
+#: structured events from the returned snippets, and never fabricate any event fact.
+#: The authoritative current date and default time window are appended per invocation
+#: by :func:`_build_system_prompt` (never baked in at import time), so the model must
+#: resolve relative dates from the application-supplied date, not its own knowledge.
+SYSTEM_PROMPT_TEMPLATE = f"""\
 You are the Community Scout, an assistant that helps technology professionals \
 discover upcoming technology community events — meetups, tech talks, and \
 community gatherings — in {LOCATION}.
@@ -116,10 +120,12 @@ technology topic.
 2. LOCATION: The location is fixed to {LOCATION} for this version. Never ask the \
 user for a location and never search any other city.
 
-3. TIME WINDOW: Extract an explicit time window from the query when present \
-(absolute dates or relative expressions such as "next 30 days" or "next month"). \
-If the query does not specify a time window, use a default window of \
-{DEFAULT_WINDOW_DAYS} calendar days starting today.
+3. TIME WINDOW: Resolve the time window using ONLY the authoritative CURRENT DATE \
+supplied below by the application — never your own notion of today's date. Extract \
+an explicit time window from the query when present (absolute dates, or relative \
+expressions such as "next 90 days", "next 30 days", or "next month"), computing all \
+relative expressions relative to that CURRENT DATE. If the query does not specify a \
+time window, use the DEFAULT {DEFAULT_WINDOW_DAYS}-DAY WINDOW supplied below verbatim.
 
 4. TOOL USE: To find events, call the agentcore_web_search_event_source tool with \
 the extracted topics and the start_date and end_date (ISO 8601 YYYY-MM-DD) of the \
@@ -135,6 +141,39 @@ so plainly and do not manufacture placeholder events.
 6. Report event source failures to the user rather than hiding them, and never \
 present partial or fabricated results as if they were complete.
 """
+
+
+def _build_date_context() -> str:
+    """Build the authoritative CURRENT DATE / DEFAULT WINDOW block for this invocation.
+
+    The current UTC date and the deterministic default 90-day window are computed in
+    Python (via :func:`_default_window`) at call time — never at import time — so a
+    long-running AgentCore Runtime instance never serves a stale date. This block is
+    appended to the system prompt so the model resolves all relative date expressions
+    against the application-supplied date rather than its own internal knowledge.
+    """
+    current_date = datetime.now(timezone.utc).date().strftime("%Y-%m-%d")
+    default_start, default_end = _default_window()
+    return (
+        f"CURRENT DATE: {current_date}\n"
+        f"DEFAULT {DEFAULT_WINDOW_DAYS}-DAY WINDOW: {default_start} through "
+        f"{default_end}\n"
+        "\n"
+        "All relative date expressions in the user's query (for example "
+        '"next 90 days", "next 30 days", "next month") MUST be resolved relative to '
+        "the CURRENT DATE above. Do not use any other notion of the current date. "
+        "When the query specifies no time window, use the DEFAULT window above exactly."
+    )
+
+
+def _build_system_prompt() -> str:
+    """Compose the effective per-invocation system prompt.
+
+    Combines the static :data:`SYSTEM_PROMPT_TEMPLATE` rules with the authoritative
+    date context from :func:`_build_date_context`. Built per invocation so the injected
+    date is always current.
+    """
+    return f"{SYSTEM_PROMPT_TEMPLATE}\n{_build_date_context()}"
 
 
 @app.entrypoint
@@ -193,23 +232,21 @@ async def handler(request: dict):
     yield format_response(ranked, context, errors)
 
 
-async def _run_agent(prompt: str, model_id: str) -> list:
-    """
-    Construct the Strands ``Agent`` and drive the tool-use loop.
+def _build_agent(model_id: str, system_prompt: str):
+    """Construct the Strands ``Agent`` for the tool-use loop.
 
-    The agent is built at invocation time with the system prompt, the resolved
-    ``model_id``, and the ``agentcore_web_search_event_source`` tool. The agent's
-    streamed events are consumed to completion; every ``CommonEvent`` list and
-    ``ToolError`` produced by the event source is collected and returned for the
-    deterministic pipeline.
+    Isolated so tests can substitute a fake agent. Strands/Bedrock is used ONLY for
+    reasoning and tool invocation; its model-generated text is never surfaced.
 
-    Args:
-        prompt: The validated user query.
-        model_id: The Bedrock model ID resolved from configuration.
+    ``system_prompt`` is the effective per-invocation prompt (base rules plus the
+    authoritative CURRENT DATE / DEFAULT WINDOW block), so the model resolves relative
+    dates from the application-supplied date rather than its own knowledge.
 
-    Returns:
-        A list of tool results — each element is either a ``list[CommonEvent]`` or a
-        ``ToolError`` — suitable for :func:`src.pipeline.aggregator.aggregate`.
+    ``callback_handler=None`` disables Strands' default callback handler, which would
+    otherwise print model/tool streaming output to stdout. Merely ignoring the events
+    returned by ``stream_async()`` does not silence that callback, so it must be
+    disabled here. The only user-visible output comes from the deterministic pipeline's
+    :func:`format_response`.
 
     Raises:
         RuntimeError: If the Strands agent framework is unavailable in this
@@ -221,63 +258,247 @@ async def _run_agent(prompt: str, model_id: str) -> list:
             "Strands Agent is not available; install 'strands-agents' to run the "
             "Community Scout agent loop."
         )
-
-    agent = Agent(
+    return Agent(
         model=model_id,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
+        # Register the JSON-safe Strands tool wrapper (returns a structured
+        # {"status": ..., "events"/"tool_name"/"reason": ...} envelope), NOT a function
+        # that returns raw ``list[CommonEvent]`` — otherwise Strands would serialize the
+        # result via ``repr()`` and the collector's ``json.loads`` would fail.
         tools=[agentcore_web_search_event_source],
+        callback_handler=None,
     )
+
+
+async def _run_agent(prompt: str, model_id: str, agent_factory=None) -> list:
+    """
+    Drive the Strands tool-use loop and collect ONLY tool results.
+
+    The agent is built at invocation time with the system prompt, the resolved
+    ``model_id``, and the ``agentcore_web_search_event_source`` tool. The agent's
+    streamed events are consumed to completion for their side effect of running the
+    tool loop; every ``CommonEvent`` list and ``ToolError`` produced by the event
+    source is collected and returned for the deterministic pipeline.
+
+    Intermediate model output — assistant text, reasoning, and content deltas emitted
+    by ``Agent.stream_async`` before/during tool execution — is NEVER yielded,
+    printed, forwarded, or otherwise exposed here. Strands/Bedrock is used strictly
+    for reasoning and tool invocation; the only user-visible response comes from the
+    deterministic pipeline in :func:`handler` (Requirement: suppress intermediate
+    model text).
+
+    Args:
+        prompt: The validated user query.
+        model_id: The Bedrock model ID resolved from configuration.
+        agent_factory: Optional callable ``(model_id, system_prompt)`` returning an
+            object with an async ``stream_async(prompt)`` method. When ``None``
+            (default), resolved to :func:`_build_agent` at call time; overridable in
+            tests.
+
+    Returns:
+        A list of tool results — each element is either a ``list[CommonEvent]`` or a
+        ``ToolError`` — suitable for :func:`src.pipeline.aggregator.aggregate`.
+
+    Raises:
+        RuntimeError: If the Strands agent framework is unavailable in this
+            environment (propagated from :func:`_build_agent`).
+    """
+    if agent_factory is None:
+        # Resolved at call time (not bound as a default) so tests can monkeypatch
+        # ``scout._build_agent`` and so the default path stays current.
+        agent_factory = _build_agent
+
+    # Build the effective system prompt per invocation so the authoritative current
+    # date / default window is always fresh (never stale from a long-running runtime).
+    system_prompt = _build_system_prompt()
+    agent = agent_factory(model_id, system_prompt)
 
     tool_outputs: list = []
     async for event in agent.stream_async(prompt):
+        # Collect recognized tool results only. Any model-generated text / reasoning /
+        # lifecycle event is intentionally ignored and never forwarded to the user.
         _collect_tool_output(event, tool_outputs)
 
     return tool_outputs
 
 
+#: Required CommonEvent fields; a deserialized tool-result record missing any of these
+#: is discarded rather than reconstructed (evidence-only, no fabrication).
+_REQUIRED_EVENT_FIELDS = ("title", "start_datetime", "city", "source_platform", "event_url")
+#: Optional CommonEvent fields carried through when present in the tool result.
+_OPTIONAL_EVENT_FIELDS = (
+    "description",
+    "end_datetime",
+    "location_name",
+    "match_confidence",
+    "source_invocation_order",
+)
+
+
 def _collect_tool_output(event: Any, tool_outputs: list) -> None:
     """
-    Extract any event-source tool result carried by a streamed agent event.
+    Extract event-source tool result(s) carried by a streamed agent event.
 
-    The Strands stream emits heterogeneous events; tool results appear as either a
-    ``list[CommonEvent]``, a ``ToolError``, or nested inside a mapping (e.g. under a
-    ``"result"``/``"output"``/``"content"`` key). This helper appends any recognized
-    ``list[CommonEvent]`` or ``ToolError`` to ``tool_outputs`` and ignores everything
-    else (text deltas, reasoning, lifecycle events).
+    Strands emits the completed tool result inside a ``message`` event as a
+    ``toolResult`` block whose ``content[].text`` holds the JSON the tool returned
+    (see :func:`src.tools.agentcore_web_search_event_source`). This helper finds every
+    such ``toolResult`` block, reconstructs a ``list[CommonEvent]`` or a ``ToolError``
+    from each, and appends them to ``tool_outputs``. Model assistant text, reasoning,
+    and lifecycle events are ignored — never forwarded to the user.
 
     Args:
         event: A single item yielded by the agent stream.
         tool_outputs: The accumulator list mutated in place.
     """
-    result = _coerce_tool_result(event)
-    if result is not None:
-        tool_outputs.append(result)
-
-
-def _coerce_tool_result(value: Any) -> "list[CommonEvent] | ToolError | None":
-    """
-    Return a tool result (``list[CommonEvent]`` or ``ToolError``) from ``value``.
-
-    Recognizes a ``ToolError`` directly, a list composed of ``CommonEvent`` records,
-    or a mapping that nests such a value under a common result key. Returns ``None``
-    when ``value`` carries no recognizable tool result.
-    """
-    if isinstance(value, ToolError):
-        return value
-
-    if isinstance(value, list) and value and all(
-        isinstance(item, CommonEvent) for item in value
+    # Backward-compatible direct shapes (used by unit tests and defensive):
+    if isinstance(event, ToolError):
+        tool_outputs.append(event)
+        return
+    if isinstance(event, list) and event and all(
+        isinstance(item, CommonEvent) for item in event
     ):
-        return value
+        tool_outputs.append(event)
+        return
 
-    if isinstance(value, dict):
-        for key in ("result", "output", "content", "tool_result", "toolResult"):
-            if key in value:
-                nested = _coerce_tool_result(value[key])
-                if nested is not None:
-                    return nested
+    if not isinstance(event, dict):
+        return
 
+    # Strands wraps the finished tool result under message -> content[] -> toolResult.
+    for tool_result in _iter_tool_results(event):
+        collected = _tool_result_to_output(tool_result)
+        if collected is not None:
+            tool_outputs.append(collected)
+
+
+def _iter_tool_results(event: dict):
+    """Yield each ``toolResult`` mapping found within a streamed ``message`` event.
+
+    Handles the confirmed Strands structure::
+
+        {"message": {"role": "user",
+                     "content": [{"toolResult": {"status": "...",
+                                                 "content": [{"text": "<JSON>"}]}}]}}
+
+    Also tolerates a top-level ``content`` list or a bare ``toolResult`` mapping.
+    """
+    message = event.get("message")
+    containers = []
+    if isinstance(message, dict):
+        containers.append(message.get("content"))
+    containers.append(event.get("content"))
+
+    for content in containers:
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and isinstance(block.get("toolResult"), dict):
+                    yield block["toolResult"]
+
+    if isinstance(event.get("toolResult"), dict):
+        yield event["toolResult"]
+
+
+def _tool_result_to_output(
+    tool_result: dict,
+) -> "list[CommonEvent] | ToolError | None":
+    """Reconstruct a ``list[CommonEvent]`` or ``ToolError`` from one toolResult block.
+
+    The tool's JSON payload is carried in ``tool_result["content"][].text``. It is
+    parsed with :func:`json.loads` (never ``eval``/``exec`` and never parsing arbitrary
+    Python) and mapped as follows:
+
+      * ``{"status": "error", "tool_name": ..., "reason": ...}`` -> ``ToolError``.
+      * ``{"status": "success", "events": [ {<fields>}, ... ]}`` -> ``list[CommonEvent]``
+        (possibly empty).
+
+    A malformed payload, a Strands-reported error status, or records missing required
+    fields are handled safely (returning a ``ToolError``, an empty list, or skipping the
+    bad record) — never raising and never fabricating event facts.
+    """
+    payload = _parse_tool_result_payload(tool_result)
+    if payload is None:
+        # Nothing parseable in this block.
+        # If Strands itself flagged an error status on the block, surface it.
+        if tool_result.get("status") == "error":
+            return ToolError(
+                tool_name="AgentCoreWebSearchEventSource",
+                reason="Web Search tool reported an error.",
+            )
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    status = payload.get("status")
+    if status == "error":
+        return ToolError(
+            tool_name=str(payload.get("tool_name") or "AgentCoreWebSearchEventSource"),
+            reason=str(payload.get("reason") or "Web Search tool reported an error."),
+        )
+
+    raw_events = payload.get("events")
+    if not isinstance(raw_events, list):
+        return None
+
+    events: list[CommonEvent] = []
+    for record in raw_events:
+        reconstructed = _reconstruct_common_event(record)
+        if reconstructed is not None:
+            events.append(reconstructed)
+    # An empty list is a valid, meaningful result (no events found).
+    return events
+
+
+def _parse_tool_result_payload(tool_result: dict) -> Any:
+    """JSON-parse the tool payload from ``tool_result["content"][].text``. Never raises.
+
+    Returns the first successfully parsed JSON value across the content blocks, or
+    ``None`` when nothing parses. Uses only :func:`json.loads`.
+    """
+    content = tool_result.get("content")
+    if not isinstance(content, list):
+        return None
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        text = block.get("text")
+        if not isinstance(text, str):
+            continue
+        try:
+            return json.loads(text)
+        except (ValueError, TypeError):
+            continue
     return None
+
+
+def _reconstruct_common_event(record: Any) -> "CommonEvent | None":
+    """Rebuild a ``CommonEvent`` from a JSON record dict, or ``None`` if invalid.
+
+    Validates that all required fields are present and non-empty, preserves optional
+    fields when present, and preserves ``event_url`` exactly. Construction is delegated
+    to the ``CommonEvent`` dataclass, whose ``__post_init__`` enforces the domain
+    invariants; any validation failure results in the record being skipped (no
+    fabrication). Never raises.
+    """
+    if not isinstance(record, dict):
+        return None
+
+    kwargs: dict = {}
+    for field_name in _REQUIRED_EVENT_FIELDS:
+        value = record.get(field_name)
+        if not isinstance(value, str) or not value.strip():
+            # Missing/invalid required field -> skip this record.
+            return None
+        kwargs[field_name] = value
+
+    for field_name in _OPTIONAL_EVENT_FIELDS:
+        if field_name in record and record.get(field_name) is not None:
+            kwargs[field_name] = record[field_name]
+
+    try:
+        return CommonEvent(**kwargs)
+    except (ValueError, TypeError):
+        # Invariant violation (e.g. bad datetime format) -> skip, never fabricate.
+        return None
 
 
 def _extract_prompt(request: Any) -> str:

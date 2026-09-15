@@ -194,6 +194,7 @@ def _convert_to_iso8601_utc(datetime_str: str) -> str:
     - ISO 8601 with timezone offset: "2025-09-15T18:00:00-05:00"
     - ISO 8601 without timezone: "2025-09-15T18:00:00"
     - Date only: "2025-09-15" (assumes midnight UTC)
+    - Full English month date only: "June 24, 2026" (assumes midnight UTC)
     - Common datetime formats
 
     **Returns:**
@@ -223,6 +224,7 @@ def _convert_to_iso8601_utc(datetime_str: str) -> str:
         "%Y-%m-%d %H:%M:%S",           # Space-separated datetime (assume UTC)
         "%Y-%m-%d",                     # Date only (assume midnight UTC)
         "%B %d, %Y at %I:%M %p",       # Common format: "September 15, 2025 at 6:00 PM"
+        "%B %d, %Y",                    # Full English month date only: "June 24, 2026" (midnight UTC)
     ]
 
     for fmt in formats_to_try:

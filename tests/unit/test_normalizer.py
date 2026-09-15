@@ -379,6 +379,27 @@ class TestConvertToISO8601UTC:
         result = _convert_to_iso8601_utc("September 15, 2025 at 6:00 PM")
         assert result == "2025-09-15T18:00:00Z"
 
+    def test_convert_full_month_date_only_june(self):
+        """Full English month date-only 'June 24, 2026' -> midnight UTC (real Meetup format)."""
+        result = _convert_to_iso8601_utc("June 24, 2026")
+        assert result == "2026-06-24T00:00:00Z"
+
+    def test_convert_full_month_date_only_september(self):
+        """Full English month date-only 'September 17, 2026' -> midnight UTC."""
+        result = _convert_to_iso8601_utc("September 17, 2026")
+        assert result == "2026-09-17T00:00:00Z"
+
+    def test_convert_full_month_date_only_october(self):
+        """Full English month date-only 'October 28, 2026' -> midnight UTC."""
+        result = _convert_to_iso8601_utc("October 28, 2026")
+        assert result == "2026-10-28T00:00:00Z"
+
+    def test_convert_full_month_date_only_does_not_fabricate_time(self):
+        """A date-only value must not gain a fabricated non-midnight time."""
+        result = _convert_to_iso8601_utc("June 24, 2026")
+        # Follows existing date-only semantics: midnight UTC, no invented wall-clock time.
+        assert result.endswith("T00:00:00Z")
+
     def test_convert_invalid_format(self):
         """Test that invalid datetime format raises ValueError."""
         with pytest.raises(ValueError, match="Could not parse datetime string"):
