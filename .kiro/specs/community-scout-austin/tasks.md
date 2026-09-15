@@ -52,8 +52,8 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
 - [ ] 4. Deferred to future version: MeetupEventSource
   - Reserved. MeetupEventSource will implement the EventSourceTool Protocol when Meetup API access is available. No code in v0.1.
 
-- [ ] 5. Implement AgentCoreWebSearchEventSource
-  - [ ] 5.1 Create `src/tools/agentcore_web_search_event_source.py`
+- [x] 5. Implement AgentCoreWebSearchEventSource
+  - [x] 5.1 Create `src/tools/agentcore_web_search_event_source.py`
     - Implement `AgentCoreWebSearchEventSource` as a class satisfying the `EventSourceTool` Protocol defined in `src/tools/interface.py`
     - Connect to the AgentCore Gateway Web Search MCP connector using `MCPClient` from Strands
     - Construct the search query from the `topics` parameter plus "events in Austin Texas"
