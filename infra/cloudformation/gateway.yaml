@@ -1,0 +1,159 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Community Scout (Austin) — Amazon Bedrock AgentCore Gateway with AWS_IAM (SigV4)
+  inbound authorization and the AWS-managed web-search connector. The gateway
+  exposes web search as an MCP tool, restricted at the target (admin) level to
+  meetup.com and lu.ma. Callers invoke the gateway with their own IAM credentials;
+  the gateway assumes the least-privilege service role defined here to reach the
+  managed web-search connector. Region: us-east-1. No Lambda-backed custom
+  resources, no third-party APIs, no OAuth, no scraping.
+
+Parameters:
+  GatewayName:
+    Type: String
+    Default: community-scout-gateway
+    Description: Name of the AgentCore Gateway.
+    # Gateway name pattern per AWS::BedrockAgentCore::Gateway (^([0-9a-zA-Z][-]?){1,48}$).
+    AllowedPattern: "^[a-zA-Z0-9]([-]?[a-zA-Z0-9]){0,47}$"
+
+  TargetName:
+    Type: String
+    Default: community-scout-web-search
+    Description: Name of the web-search gateway target (also namespaces the tool as <TargetName>___WebSearch).
+    # Target name pattern per AWS::BedrockAgentCore::GatewayTarget ConnectorConfiguration.
+    AllowedPattern: "^[a-zA-Z][a-zA-Z0-9_-]*$"
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # (1) Least-privilege IAM execution role for the AgentCore Gateway.
+  #
+  # The gateway assumes this role (outbound) to call the managed web-search
+  # connector. Permissions are scoped to exactly two actions: invoking this
+  # gateway and invoking the managed Web Search tool. The trust policy restricts
+  # assumption to the AgentCore service, this account, and gateway resources in
+  # this account (SourceAccount + SourceArn) to prevent the confused-deputy
+  # problem.
+  # ---------------------------------------------------------------------------
+  GatewayServicePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Least-privilege permissions for the Community Scout AgentCore Gateway service role.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: InvokeGateway
+            Effect: Allow
+            Action: bedrock-agentcore:InvokeGateway
+            Resource: !Sub "arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:gateway/*"
+          - Sid: InvokeWebSearch
+            Effect: Allow
+            Action: bedrock-agentcore:InvokeWebSearch
+            # The web-search managed tool ARN is regional and account-agnostic (aws-owned).
+            Resource: !Sub "arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:aws:tool/web-search.v1"
+
+  GatewayServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: AgentCore Gateway execution role for the Community Scout web-search connector.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowAgentCoreToAssumeRole
+            Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:gateway/*"
+      ManagedPolicyArns:
+        - !Ref GatewayServicePolicy
+
+  # ---------------------------------------------------------------------------
+  # (2) Amazon Bedrock AgentCore Gateway for Community Scout.
+  #     - MCP protocol
+  #     - AWS_IAM inbound authorization (SigV4)
+  #     - Deploy in us-east-1 (a Web Search supported region).
+  # ---------------------------------------------------------------------------
+  Gateway:
+    Type: AWS::BedrockAgentCore::Gateway
+    Properties:
+      Name: !Ref GatewayName
+      Description: Community Scout Austin — MCP gateway with IAM/SigV4 inbound auth.
+      ProtocolType: MCP
+      AuthorizerType: AWS_IAM
+      RoleArn: !GetAtt GatewayServiceRole.Arn
+
+  # ---------------------------------------------------------------------------
+  # (3) AgentCore Gateway Target using the AWS-managed Web Search connector.
+  #     - connectorId: web-search
+  #     - Admin-level domainFilter.include restricts EVERY search flowing through
+  #       this target to meetup.com and lu.ma. This is hard, server-side
+  #       enforcement (not model-dependent). The include list is a feature of
+  #       connector version 1.2.0+, so configuring it requires — and pins the
+  #       target to — a domain-filtering-capable connector version.
+  #
+  #     NOTE ON VERSION PINNING: the native AWS::BedrockAgentCore::GatewayTarget
+  #     ConnectorSource schema currently exposes only ConnectorId (no Version
+  #     property; additionalProperties:false), so an explicit "version: 1.2.0"
+  #     field cannot be declared in CloudFormation today. Supplying the
+  #     domainFilter.include admin configuration below is what selects a
+  #     1.2.0-or-newer connector version, since earlier versions do not accept
+  #     an include list. This satisfies the domain-filtering requirement using
+  #     only native resources.
+  # ---------------------------------------------------------------------------
+  WebSearchTarget:
+    Type: AWS::BedrockAgentCore::GatewayTarget
+    Properties:
+      GatewayIdentifier: !GetAtt Gateway.GatewayIdentifier
+      Name: !Ref TargetName
+      Description: AWS-managed Web Search connector restricted to meetup.com and lu.ma.
+      CredentialProviderConfigurations:
+        - CredentialProviderType: GATEWAY_IAM_ROLE
+      TargetConfiguration:
+        Mcp:
+          Connector:
+            Source:
+              ConnectorId: web-search
+            Configurations:
+              - Name: WebSearch
+                ParameterValues:
+                  domainFilter:
+                    include:
+                      - meetup.com
+                      - lu.ma
+
+Outputs:
+  GatewayId:
+    Description: AgentCore Gateway identifier.
+    Value: !GetAtt Gateway.GatewayIdentifier
+    Export:
+      Name: !Sub "${AWS::StackName}-GatewayId"
+
+  GatewayArn:
+    Description: AgentCore Gateway ARN.
+    Value: !GetAtt Gateway.GatewayArn
+    Export:
+      Name: !Sub "${AWS::StackName}-GatewayArn"
+
+  GatewayUrl:
+    Description: MCP endpoint URL exposed by the gateway (use as the AgentCore gateway URL for clients).
+    Value: !GetAtt Gateway.GatewayUrl
+    Export:
+      Name: !Sub "${AWS::StackName}-GatewayUrl"
+
+  GatewayTargetId:
+    Description: Web Search gateway target identifier.
+    # Ref on a GatewayTarget returns "<gatewayId>|<targetId>"; TargetId attribute returns just the target ID.
+    Value: !GetAtt WebSearchTarget.TargetId
+    Export:
+      Name: !Sub "${AWS::StackName}-GatewayTargetId"
+
+  GatewayServiceRoleArn:
+    Description: ARN of the least-privilege gateway execution role.
+    Value: !GetAtt GatewayServiceRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-GatewayServiceRoleArn"
