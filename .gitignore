@@ -217,3 +217,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 runtime-response.json
+
+
+# Hidden files
+.agents/
+.claude/
