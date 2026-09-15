@@ -251,16 +251,28 @@ class AgentCoreWebSearchEventSource:
             )
         return self._parse_search_results(response)
 
+    #: AWS region and service for SigV4-signed requests to the AgentCore Gateway.
+    _AWS_REGION = "us-east-1"
+    _AWS_SERVICE = "bedrock-agentcore"
+
     def _create_mcp_transport(self):
         """Create the MCP transport to the AgentCore Gateway Web Search connector.
 
         Isolated here so the transport/gateway wiring can change without affecting the
-        rest of the class. The AgentCore Web Search Tool is a managed AWS service; no
-        API keys or third-party credentials are required.
+        rest of the class. The deployed AgentCore Gateway uses ``AuthorizerType: AWS_IAM``,
+        so requests must be SigV4-signed. This uses the AWS-supported SigV4 MCP transport
+        (``aws_iam_streamablehttp_client``), which signs each streamable-HTTP request with
+        the caller's AWS credentials for the ``bedrock-agentcore`` service in ``us-east-1``.
+        The AgentCore Web Search Tool is a managed AWS service; no API keys or third-party
+        credentials are required.
         """
-        from mcp.client.streamable_http import streamablehttp_client
+        from mcp_proxy_for_aws.client import aws_iam_streamablehttp_client
 
-        return streamablehttp_client(self._gateway_url)
+        return aws_iam_streamablehttp_client(
+            endpoint=self._gateway_url,
+            aws_region=self._AWS_REGION,
+            aws_service=self._AWS_SERVICE,
+        )
 
     # ------------------------------------------------------------------ #
     # Snippet parsing / field extraction
