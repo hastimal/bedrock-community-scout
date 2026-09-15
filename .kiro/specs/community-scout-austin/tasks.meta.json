@@ -7,6 +7,25 @@
         "chatSessionId": "sess_50c47c2c-2466-4e57-996f-1f4e37f3e1b7",
         "timestamp": 1789449504498
       }
+    ],
+    "2.1 Define `CommonEvent`, `RankedEvent`, `ToolError`, and `QueryContext` dataclasses in `src/models/events.py` with all required and optional fields, type annotations, and docstrings matching the design specification": [
+      {
+        "executionId": "f848418c-da1e-4c84-a40b-c48a9a09f91b",
+        "chatSessionId": "sess_e58defb8-8119-46d8-bded-6df12dc3fe32",
+        "timestamp": 1789450585056
+      },
+      {
+        "executionId": "f848418c-da1e-4c84-a40b-c48a9a09f91b",
+        "chatSessionId": "sess_e58defb8-8119-46d8-bded-6df12dc3fe32",
+        "timestamp": 1789450694742
+      }
+    ],
+    "2. Implement data models": [
+      {
+        "executionId": "f848418c-da1e-4c84-a40b-c48a9a09f91b",
+        "chatSessionId": "sess_e58defb8-8119-46d8-bded-6df12dc3fe32",
+        "timestamp": 1789450694802
+      }
     ]
   }
 }

@@ -13,8 +13,8 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
   - Create `src/config.py` that reads `BEDROCK_MODEL_ID` (default `us.anthropic.claude-sonnet-4-20250514`) from the environment; expose `get_model_id()` helper; no credential helpers needed
   - _Requirements: 10.1, 10.3_
 
-- [ ] 2. Implement data models
-  - [ ] 2.1 Define `CommonEvent`, `RankedEvent`, `ToolError`, and `QueryContext` dataclasses in `src/models/events.py` with all required and optional fields, type annotations, and docstrings matching the design specification
+- [x] 2. Implement data models
+  - [x] 2.1 Define `CommonEvent`, `RankedEvent`, `ToolError`, and `QueryContext` dataclasses in `src/models/events.py` with all required and optional fields, type annotations, and docstrings matching the design specification
     - Implement `CommonEvent` required fields: title, start_datetime, city, source_platform, event_url (all non-empty strings)
     - Implement `CommonEvent` optional fields: description, end_datetime, location_name (string or null)
     - Implement `CommonEvent` invariant: required string fields must be non-empty; `start_datetime` / `end_datetime` (when non-null) accepted only as ISO 8601 UTC strings ending in `Z`
