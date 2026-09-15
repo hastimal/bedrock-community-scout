@@ -241,7 +241,7 @@ Implement the AI Community Scout as an agentic Python application hosted on Amaz
     - Mock Web Search Tool to return empty results; assert user receives the "no events found" message with suggestions and a count of 0
     - _Requirements: 8.4, 9.3_
 
-- [ ] 16. Final checkpoint — all tests pass
+- [x] 16. Final checkpoint — all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

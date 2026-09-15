@@ -2,7 +2,19 @@
   "pbtResults": {
     "3.3 Write property test for `normalize_event()` — Property 6": {
       "status": "passed",
-      "lastRunTimestamp": 1789451564178
+      "lastRunTimestamp": 1789454670600
+    },
+    "14.1 Write property test for URL immutability end-to-end — Property 5": {
+      "status": "passed",
+      "lastRunTimestamp": 1789454664824
+    },
+    "14.2 Write property test for tool failure containment — Property 10": {
+      "status": "passed",
+      "lastRunTimestamp": 1789454668093
+    },
+    "14.3 Write property test for time window filtering — Property 9": {
+      "status": "passed",
+      "lastRunTimestamp": 1789454669538
     }
   },
   "executionHistory": {
@@ -302,6 +314,18 @@
         "executionId": "64d0156e-9027-4bdc-aef0-a571d08e9e9d",
         "chatSessionId": "sess_ddbbe4b3-ddb8-4398-9679-2d23cf69bfc3",
         "timestamp": 1789454494340
+      }
+    ],
+    "16. Final checkpoint — all tests pass": [
+      {
+        "executionId": "0de22064-c9c8-4512-be74-eb2591b73680",
+        "chatSessionId": "sess_1a1dbf52-1740-44de-8502-569495e8df88",
+        "timestamp": 1789454570475
+      },
+      {
+        "executionId": "0de22064-c9c8-4512-be74-eb2591b73680",
+        "chatSessionId": "sess_1a1dbf52-1740-44de-8502-569495e8df88",
+        "timestamp": 1789454686094
       }
     ]
   }
