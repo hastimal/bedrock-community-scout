@@ -89,6 +89,14 @@ class AgentCoreWebSearchEventSource:
     #: The fixed Location for v0.1. Not a caller parameter.
     _LOCATION = "Austin, Texas"
 
+    #: TEMPORARY diagnostic prefix. Every discovery-diagnostic INFO log line starts with
+    #: this marker so it is easy to grep in the AgentCore Runtime CloudWatch logs. This
+    #: is DIAGNOSTIC-ONLY and does not affect any search/extraction/filtering behavior.
+    _DIAG_PREFIX = "[DISCOVERY_DIAGNOSTIC]"
+
+    #: Max characters of evidence to log per raw result (diagnostic readability).
+    _DIAG_EVIDENCE_CHARS = 300
+
     #: AgentCore Gateway Web Search MCP connector endpoint. Read from the environment so
     #: it can be overridden per deployment without code changes; falls back to the
     #: managed default gateway URL.
@@ -104,9 +112,68 @@ class AgentCoreWebSearchEventSource:
     #: add new source platforms (Requirement 3.8).
     _DOMAIN_FILTER = {"include": ["meetup.com", "lu.ma"]}
 
+    #: Source platforms searched INDEPENDENTLY, one Web Search call per (topic, source),
+    #: each domain-scoped so one source cannot crowd the other out of the result set.
+    #: Extend this list to add a new source platform.
+    _SEARCH_SOURCES = ["meetup.com", "lu.ma"]
+
+    #: Per-source, per-topic result cap requested from the Web Search Tool. Kept well
+    #: above the final cap so the pipeline gathers more candidates than it returns.
+    _PER_SOURCE_MAX_RESULTS = 15
+
+    #: Maximum number of final events returned. This is a CAP, not a quota: fewer are
+    #: returned when fewer verified relevant events exist; unrelated events are never
+    #: added to reach it.
+    _MAX_FINAL_RESULTS = 10
+
     #: Query text template. The time window is embedded here (Requirement 3.2); the page
     #: publication date is never used as a substitute for the event date.
     _QUERY_TEMPLATE = "{topics} events in {location} between {start_date} and {end_date}"
+
+    #: Deterministic topic-relevance keyword sets used to gate a candidate event
+    #: against the REQUESTED topic before it is accepted (precision over recall).
+    #:
+    #: Each key is a canonical topic; the value is a list of ``(pattern, is_regex)``
+    #: signals. A signal matches when it is found in the event's own evidence (title +
+    #: extracted description/snippet), using word-boundary matching so short acronyms
+    #: (e.g. "AWS", "K8s", "EKS") do not match inside unrelated words. This gate rejects
+    #: events that merely came from an Austin Meetup discovery page or whose topic term
+    #: appears only in unrelated page metadata / a neighboring event.
+    _TOPIC_KEYWORDS: dict[str, list[str]] = {
+        "agentic ai": [
+            r"agentic\s+ai",
+            r"\bagentic\b",
+            r"\bai\s+agents?\b",
+            r"\bautonomous\s+agents?\b",
+            r"\bllm\s+agents?\b",
+            r"\bmulti[-\s]?agent\b",
+            r"\bagent(?:ic)?\s+workflows?\b",
+            r"\bgenerative\s+ai\b",
+            r"\bgen\s?ai\b",
+        ],
+        "aws": [
+            r"\baws\b",
+            r"amazon\s+web\s+services",
+            r"\bbedrock\b",
+            r"\bagentcore\b",
+            r"\blambda\b",
+            r"\bec2\b",
+            r"\beks\b",
+            r"\bsagemaker\b",
+            r"\bcloudformation\b",
+        ],
+        "kubernetes": [
+            r"\bkubernetes\b",
+            r"\bk8s\b",
+            r"\bkubectl\b",
+            r"\bkubecon\b",
+            r"\beks\b",
+            r"\bgke\b",
+            r"\baks\b",
+            r"\bkubevirt\b",
+            r"\bhelm\b",
+        ],
+    }
 
     #: Mapping from source URL domain to canonical platform name (Requirement 9.2).
     _PLATFORM_BY_DOMAIN = {
@@ -160,8 +227,12 @@ class AgentCoreWebSearchEventSource:
             end_date,
         )
 
+        # Source-aware discovery: one domain-scoped Web Search call per (topic, source)
+        # so Meetup results cannot crowd Luma out of the result set (and vice versa).
+        # Each candidate carries the 0-based invocation order it came from, used for
+        # deterministic tie-breaking in deduplication/ranking.
         try:
-            raw_results = self._invoke_web_search(topics, start_date, end_date)
+            candidates = self._discover_candidates(topics, start_date, end_date)
         except Exception as exc:  # noqa: BLE001 - errors must be encoded, not raised
             reason = f"Web Search Tool invocation failed: {exc}"
             logger.warning(
@@ -169,21 +240,66 @@ class AgentCoreWebSearchEventSource:
             )
             return ToolError(tool_name="AgentCoreWebSearchEventSource", reason=reason)
 
-        # No results for the query/domain filter -> empty list (Requirement 3.6).
-        if not raw_results:
+        # No results across any source -> empty list (Requirement 3.6).
+        if not candidates:
             return []
 
+        logger.info(
+            "Source-aware discovery gathered %d raw candidate(s) across %d source(s)",
+            len(candidates),
+            len(self._SEARCH_SOURCES),
+        )
+
+        # TEMPORARY per-source diagnostic counters (behavior-neutral).
+        topic_label = self._diag_topic_label(topics)
+        diag_raw: dict[str, int] = {}
+        diag_extracted: dict[str, int] = {}
+        diag_accepted: dict[str, int] = {}
+        diag_rejected: dict[str, int] = {}
+
+        def _diag_source_for_order(order: int) -> str:
+            if 0 <= order < len(self._SEARCH_SOURCES):
+                return self._diag_source_name(self._SEARCH_SOURCES[order])
+            return "unknown"
+
         events: list[CommonEvent] = []
-        for result in raw_results:
+        for result, invocation_order in candidates:
+            diag_source = _diag_source_for_order(invocation_order)
+            diag_raw[diag_source] = diag_raw.get(diag_source, 0) + 1
+            diag_url = result.get("url") if isinstance(result, dict) else None
+            diag_raw_title = result.get("title") if isinstance(result, dict) else None
+
             raw_event = self._extract_raw_event(result, start_date, end_date)
             if raw_event is None:
                 # Required field missing/ambiguous in the evidence: exclude, never
                 # fabricate (Requirements 3.3, 9.1).
+                diag_rejected[diag_source] = diag_rejected.get(diag_source, 0) + 1
+                self._diag_log(
+                    source=diag_source, topic=topic_label, title=diag_raw_title,
+                    url=diag_url, status="rejected", reason="extraction_failed",
+                )
                 continue
+
+            # Candidate successfully extracted from the raw evidence.
+            diag_extracted[diag_source] = diag_extracted.get(diag_source, 0) + 1
+            self._diag_log(
+                source=diag_source, topic=topic_label,
+                candidate_title=raw_event.get("title"),
+                candidate_date=raw_event.get("start_datetime"),
+                candidate_city=raw_event.get("city"),
+                candidate_url=raw_event.get("event_url"),
+                status="extracted",
+            )
 
             source_platform = self._derive_platform(raw_event.get("event_url", ""))
             if source_platform is None:
                 # URL not from a configured domain -> cannot derive platform reliably.
+                diag_rejected[diag_source] = diag_rejected.get(diag_source, 0) + 1
+                self._diag_log(
+                    source=diag_source, topic=topic_label,
+                    title=raw_event.get("title"), url=raw_event.get("event_url"),
+                    status="rejected", reason="extraction_failed",
+                )
                 continue
 
             match_confidence = self._extract_confidence(result)
@@ -191,50 +307,173 @@ class AgentCoreWebSearchEventSource:
             event = normalize_event(
                 raw_event=raw_event,
                 source_platform=source_platform,
-                source_invocation_order=0,
+                source_invocation_order=invocation_order,
                 match_confidence=match_confidence,
                 event_identifier=raw_event.get("title"),
             )
             if event is None:
                 # normalize_event already logged the exclusion reason.
+                diag_rejected[diag_source] = diag_rejected.get(diag_source, 0) + 1
+                self._diag_log(
+                    source=diag_source, topic=topic_label,
+                    title=raw_event.get("title"), url=raw_event.get("event_url"),
+                    status="rejected", reason="extraction_failed",
+                )
+                continue
+
+            # Deterministic topic-relevance gate (precision over recall): the EVENT's
+            # own evidence (title + extracted description) must contain credible
+            # evidence for at least one REQUESTED topic. This rejects false positives
+            # from generic Austin Meetup discovery pages (e.g. "Hong Kong Mahjong",
+            # "Religious Studies: Demon Hunters") that were returned only because the
+            # search term appeared elsewhere on the page. Never substitute unrelated
+            # events; if nothing relevant exists, this yields zero events.
+            if not self._event_matches_requested_topics(event, topics):
+                logger.info(
+                    "Topic gate rejected event '%s' — no requested-topic evidence "
+                    "in its title/description (topics=%s)",
+                    event.title,
+                    topics,
+                )
+                diag_rejected[diag_source] = diag_rejected.get(diag_source, 0) + 1
+                self._diag_log(
+                    source=diag_source, topic=topic_label, title=event.title,
+                    url=event.event_url, status="rejected", reason="topic_irrelevant",
+                )
                 continue
 
             # Post-filter by verified event start date (Requirements 3.2, 3.5). The page
             # publication date is never used as a substitute for the event start date.
             if self._is_within_window(event.start_datetime, start_date, end_date):
                 events.append(event)
+                diag_accepted[diag_source] = diag_accepted.get(diag_source, 0) + 1
+                self._diag_log(
+                    source=diag_source, topic=topic_label, title=event.title,
+                    date=event.start_datetime, url=event.event_url, status="accepted",
+                )
+            else:
+                diag_rejected[diag_source] = diag_rejected.get(diag_source, 0) + 1
+                self._diag_log(
+                    source=diag_source, topic=topic_label, title=event.title,
+                    url=event.event_url, status="rejected", reason="outside_date_window",
+                )
 
-        return events
+        # Per-source discovery summary (diagnostic).
+        for diag_source in sorted(set(diag_raw) | set(self._diag_source_name(s2) for s2 in self._SEARCH_SOURCES)):
+            self._diag_log(
+                source=diag_source,
+                topic=topic_label,
+                raw_results=diag_raw.get(diag_source, 0),
+                extracted_candidates=diag_extracted.get(diag_source, 0),
+                accepted_events=diag_accepted.get(diag_source, 0),
+                rejected_events=diag_rejected.get(diag_source, 0),
+            )
+
+        # Cross-source deduplication, then deterministic ranking, then a TOP-N cap.
+        # Both Meetup and Luma events are eligible; dedup preserves event_url exactly.
+        # The cap is a MAXIMUM, never a quota — fewer are returned when fewer verified
+        # relevant events exist, and unrelated events are never added to reach it.
+        return self._select_top_events(events, topics, start_date, end_date)
 
     # ------------------------------------------------------------------ #
     # Web Search Tool invocation (isolated configuration)
     # ------------------------------------------------------------------ #
-    def _build_query(self, topics: list[str], start_date: str, end_date: str) -> str:
-        """Construct the search-query text embedding topics, location, and time window."""
+    def _build_query(
+        self,
+        topics: list[str],
+        start_date: str,
+        end_date: str,
+        source: Optional[str] = None,
+    ) -> str:
+        """Construct the search-query text embedding topics, location, and time window.
+
+        When ``source`` is given, the query is made source-specific (e.g. by naming the
+        platform and using a ``site:`` hint) so a single source's results do not crowd
+        the other out of the Web Search result set.
+        """
         topic_text = " ".join(t.strip() for t in topics if t and t.strip())
-        return self._QUERY_TEMPLATE.format(
+        base = self._QUERY_TEMPLATE.format(
             topics=topic_text,
             location=self._LOCATION,
             start_date=start_date,
             end_date=end_date,
         )
+        if source:
+            platform = self._PLATFORM_BY_DOMAIN.get(source, source)
+            return f"{platform} {base} site:{source}"
+        return base
 
-    def _build_arguments(self, topics: list[str], start_date: str, end_date: str) -> dict:
+    def _build_arguments(
+        self,
+        topics: list[str],
+        start_date: str,
+        end_date: str,
+        source: Optional[str] = None,
+    ) -> dict:
         """Assemble the MCP ``tools/call`` arguments, including the domain filter.
 
         The time window is embedded in the query text only. ``publishedDateFilter`` is
         intentionally NOT set, because a page's publication date is not the event date
         (Requirement 3.2).
+
+        When ``source`` is given, the domain filter is scoped to that single source and
+        the query is made source-specific, so each source is searched INDEPENDENTLY and
+        one source cannot crowd the other out. When ``source`` is ``None``, the original
+        combined domain filter is used (backward-compatible).
         """
+        if source:
+            domain_filter = {"include": [source]}
+        else:
+            domain_filter = self._DOMAIN_FILTER
         return {
-            "query": self._build_query(topics, start_date, end_date),
-            "filters": {"domainFilter": self._DOMAIN_FILTER},
+            "query": self._build_query(topics, start_date, end_date, source=source),
+            "maxResults": self._PER_SOURCE_MAX_RESULTS,
+            "filters": {"domainFilter": domain_filter},
         }
+
+    def _discover_candidates(
+        self, topics: list[str], start_date: str, end_date: str
+    ) -> list[tuple[dict, int]]:
+        """Gather raw Web Search candidates across all sources, tagged with call order.
+
+        Delegates to :meth:`_invoke_web_search`, which performs one domain-scoped Web
+        Search call per source so both Meetup and Luma get an independent opportunity to
+        contribute. Each raw result is paired with the 0-based invocation order it was
+        discovered in (used for deterministic dedup/ranking tie-breaks). This gathers
+        MORE candidates than the final cap so the pipeline has room to select the best.
+
+        Raises:
+            Exception: Any transport/tool error is allowed to propagate; the caller
+                converts it into a ``ToolError``.
+        """
+        raw_results = self._invoke_web_search(topics, start_date, end_date)
+
+        # ``_invoke_web_search`` may return either a flat list of result dicts (the
+        # backward-compatible / mocked shape) or a list of ``(result, order)`` pairs
+        # (the source-aware shape). Normalize to ``(result, order)`` pairs.
+        candidates: list[tuple[dict, int]] = []
+        for item in raw_results:
+            if (
+                isinstance(item, tuple)
+                and len(item) == 2
+                and isinstance(item[0], dict)
+                and isinstance(item[1], int)
+            ):
+                candidates.append(item)
+            elif isinstance(item, dict):
+                candidates.append((item, 0))
+        return candidates
 
     def _invoke_web_search(
         self, topics: list[str], start_date: str, end_date: str
-    ) -> list[dict]:
-        """Invoke the Web Search Tool over MCP and return the raw result dicts.
+    ):
+        """Invoke the Web Search Tool over MCP, once per source, and return raw results.
+
+        Performs one INDEPENDENT, domain-scoped Web Search call per source in
+        :data:`_SEARCH_SOURCES` (e.g. meetup.com and lu.ma), so a single source cannot
+        crowd the other out of the result set. Returns a list of ``(result, order)``
+        pairs, where ``order`` is the 0-based index of the source-specific call the
+        result came from.
 
         Raises:
             RuntimeError: If the Strands MCP client is unavailable in this environment.
@@ -247,7 +486,55 @@ class AgentCoreWebSearchEventSource:
                 "the AgentCore Web Search Tool."
             )
 
-        arguments = self._build_arguments(topics, start_date, end_date)
+        results: list[tuple[dict, int]] = []
+        topic_label = self._diag_topic_label(topics)
+        for order, source in enumerate(self._SEARCH_SOURCES):
+            # Behavior-neutral diagnostics: reconstruct the exact arguments this call
+            # will send so we can log the query and domain filter (without altering it).
+            args = self._build_arguments(topics, start_date, end_date, source=source)
+            source_results = self._invoke_web_search_for_source(
+                topics, start_date, end_date, source
+            )
+
+            # (1) Per source-specific Web Search call: query, domain filter, raw count.
+            self._diag_log(
+                source=self._diag_source_name(source),
+                topic=topic_label,
+                query=args.get("query", ""),
+                domain_filter=args.get("filters", {}).get("domainFilter", {}).get(
+                    "include", []
+                ),
+                raw_results=len(source_results),
+            )
+
+            # (2) Each raw result: index, title, exact URL, first 300 chars of evidence.
+            for idx, raw in enumerate(source_results, start=1):
+                self._diag_log(
+                    source=self._diag_source_name(source),
+                    topic=topic_label,
+                    result=idx,
+                    title=(raw.get("title") if isinstance(raw, dict) else None),
+                    url=(raw.get("url") if isinstance(raw, dict) else None),
+                    evidence=self._diag_evidence(raw),
+                )
+
+            for raw in source_results:
+                results.append((raw, order))
+        return results
+
+    def _invoke_web_search_for_source(
+        self, topics: list[str], start_date: str, end_date: str, source: str
+    ) -> list[dict]:
+        """Invoke the Web Search Tool for a SINGLE source (domain-scoped) over MCP.
+
+        Uses the existing AgentCore Gateway Web Search tool with a domain filter scoped
+        to ``source`` and a source-specific query. No Meetup/Luma API and no scraping.
+
+        Raises:
+            Exception: Any transport/tool error is allowed to propagate; the caller
+                converts it into a ``ToolError``.
+        """
+        arguments = self._build_arguments(topics, start_date, end_date, source=source)
 
         # The MCPClient manages the connection lifecycle to the AgentCore Gateway Web
         # Search connector. The client is used as a context manager so the session is
@@ -255,7 +542,7 @@ class AgentCoreWebSearchEventSource:
         client = MCPClient(lambda: self._create_mcp_transport())
         with client:
             response = client.call_tool_sync(
-                tool_use_id="agentcore-web-search",
+                tool_use_id=f"agentcore-web-search-{source}",
                 name=self._WEB_SEARCH_TOOL_NAME,
                 arguments=arguments,
                 read_timeout_seconds=timedelta(seconds=_TOOL_TIMEOUT_SECONDS),
@@ -843,6 +1130,194 @@ class AgentCoreWebSearchEventSource:
         if isinstance(value, str) and value.strip():
             return value.strip()
         return None
+
+    # ------------------------------------------------------------------ #
+    # Topic-relevance gate (deterministic; precision over recall)
+    # ------------------------------------------------------------------ #
+    @classmethod
+    def _canonical_topics(cls, topic: str) -> list[str]:
+        """Map a requested topic string to the canonical keyword bucket(s) it implies.
+
+        Matching is tolerant of surface variations (case, punctuation, extra words) so a
+        requested topic such as "Agentic AI", "aws", or "Kubernetes / K8s" resolves to
+        the right keyword set. A requested topic that matches no known bucket falls back
+        to using its own trimmed text as a literal signal (so custom topics still gate
+        on their own term rather than being accepted unconditionally).
+        """
+        normalized = re.sub(r"[^a-z0-9]+", " ", (topic or "").lower()).strip()
+        matched: list[str] = []
+        for canonical in cls._TOPIC_KEYWORDS:
+            # e.g. requested "agentic ai" or "ai agents" -> "agentic ai" bucket;
+            # requested "aws" -> "aws"; requested "kubernetes"/"k8s" -> "kubernetes".
+            canon_tokens = canonical.split()
+            if canonical in normalized or all(tok in normalized for tok in canon_tokens):
+                matched.append(canonical)
+        # Direct acronym/keyword hints in the requested topic (e.g. "k8s", "eks").
+        for canonical, patterns in cls._TOPIC_KEYWORDS.items():
+            if canonical in matched:
+                continue
+            for pattern in patterns:
+                if re.search(pattern, normalized, re.IGNORECASE):
+                    matched.append(canonical)
+                    break
+        return matched
+
+    @classmethod
+    def _evidence_matches_topic(cls, evidence: str, canonical_topic: str) -> bool:
+        """Return True if ``evidence`` contains a credible signal for ``canonical_topic``.
+
+        Uses the deterministic keyword patterns with word-boundary matching, so short
+        acronyms do not match inside unrelated words.
+        """
+        patterns = cls._TOPIC_KEYWORDS.get(canonical_topic, [])
+        for pattern in patterns:
+            if re.search(pattern, evidence, re.IGNORECASE):
+                return True
+        return False
+
+    def _event_matches_requested_topics(
+        self, event: CommonEvent, topics: list[str]
+    ) -> bool:
+        """Gate an event against the REQUESTED topics using its own evidence.
+
+        The event's evidence is its title plus any extracted description (both come only
+        from the event itself, per the evidence-constrained extraction rules). The event
+        is accepted only if that evidence contains a credible keyword signal for at least
+        one requested topic. Page metadata, sibling events, and the fact that a result
+        came from an Austin discovery page are NOT evidence and cannot pass the gate.
+
+        If a requested topic maps to no known keyword bucket, its own trimmed term is
+        used as a literal, word-boundary signal so custom topics still gate on-topic.
+        """
+        evidence_parts = [event.title or ""]
+        if event.description:
+            evidence_parts.append(event.description)
+        evidence = " ".join(evidence_parts)
+        if not evidence.strip():
+            return False
+
+        for topic in topics:
+            canonicals = self._canonical_topics(topic)
+            if canonicals:
+                for canonical in canonicals:
+                    if self._evidence_matches_topic(evidence, canonical):
+                        return True
+            else:
+                # Unknown/custom topic: require its own term (word-boundary) in evidence.
+                term = (topic or "").strip()
+                if term and re.search(
+                    r"\b" + re.escape(term) + r"\b", evidence, re.IGNORECASE
+                ):
+                    return True
+        return False
+
+    # ------------------------------------------------------------------ #
+    # TEMPORARY discovery diagnostics (INFO-level, behavior-neutral)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _diag_source_name(domain_or_platform: str) -> str:
+        """Map a domain/platform to the short diagnostic source label (meetup/luma)."""
+        value = (domain_or_platform or "").lower()
+        if "meetup" in value:
+            return "meetup"
+        if "lu.ma" in value or "luma" in value:
+            return "luma"
+        return value or "unknown"
+
+    @classmethod
+    def _diag_topic_label(cls, topics: list[str]) -> str:
+        """Render the requested topics as a single diagnostic label.
+
+        The application searches all requested topics together per source, so the
+        diagnostic ``topic`` field reflects that combined request faithfully.
+        """
+        return ", ".join(t.strip() for t in topics if t and t.strip())
+
+    @classmethod
+    def _diag_evidence(cls, result: dict) -> str:
+        """Return the evidence text using the SAME field selection as extraction.
+
+        Prefers ``text`` then ``snippet`` (identical to ``_extract_raw_event``); the
+        evidence is not altered — only truncated for readable logging.
+        """
+        if not isinstance(result, dict):
+            return ""
+        evidence = ""
+        for key in ("text", "snippet"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                evidence = value
+                break
+        # Collapse newlines for one-line logging; do NOT alter content otherwise.
+        collapsed = " ".join(evidence.split())
+        return collapsed[: cls._DIAG_EVIDENCE_CHARS]
+
+    def _diag_log(self, **fields) -> None:
+        """Emit one INFO-level ``[DISCOVERY_DIAGNOSTIC]`` line with key=value fields.
+
+        Writes to the module logger (stdout/stderr under AgentCore Runtime, so it lands
+        in the existing CloudWatch log group). SECURITY: only discovery/search evidence
+        is ever passed here — never credentials, headers, tokens, or signatures.
+        """
+        parts = [self._DIAG_PREFIX]
+        for key, value in fields.items():
+            parts.append(f"{key}={value!r}" if isinstance(value, str) else f"{key}={value}")
+        logger.info(" ".join(parts))
+
+    # ------------------------------------------------------------------ #
+    # Cross-source selection: deduplicate -> rank -> top-N cap
+    # ------------------------------------------------------------------ #
+    def _select_top_events(
+        self,
+        events: list[CommonEvent],
+        topics: list[str],
+        start_date: str,
+        end_date: str,
+    ) -> list[CommonEvent]:
+        """Deduplicate across sources, rank deterministically, and cap to the top N.
+
+        Applies the existing pipeline steps in-source so the tool returns the best
+        unique, relevant events regardless of which source (Meetup or Luma) they came
+        from:
+
+        1. :func:`src.pipeline.deduplicator.deduplicate` — cross-source dedup by
+           (title, date, city); retains the highest-confidence record and preserves
+           ``event_url`` byte-for-byte.
+        2. :func:`src.pipeline.ranker.rank` — deterministic topic+recency ranking.
+        3. Cap to :data:`_MAX_FINAL_RESULTS`. This is a MAXIMUM, not a quota: if fewer
+           verified relevant events exist, fewer are returned; unrelated events are
+           never added to reach the cap.
+
+        The events are returned in ranked order (the downstream pipeline re-runs these
+        same deterministic steps, producing the identical ordering).
+        """
+        # Imported locally to avoid any import-time coupling; both are pure functions.
+        from src.pipeline.deduplicator import deduplicate
+        from src.pipeline.ranker import rank
+        from src.models.events import QueryContext
+
+        if not events:
+            return []
+
+        deduplicated = deduplicate(events)
+
+        context = QueryContext(
+            topics=list(topics),
+            location=self._LOCATION,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        ranked = rank(deduplicated, context)
+
+        top = [ranked_event.event for ranked_event in ranked[: self._MAX_FINAL_RESULTS]]
+        logger.info(
+            "Selection: %d relevant event(s) after dedup/rank; returning top %d "
+            "(cap=%d)",
+            len(deduplicated),
+            len(top),
+            self._MAX_FINAL_RESULTS,
+        )
+        return top
 
 
 # Module-level singleton reused across invocations.

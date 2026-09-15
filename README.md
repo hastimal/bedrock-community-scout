@@ -71,6 +71,35 @@ Find cloud and AI events in Houston this month.
 - User preferences
 - Community opportunity recommendations
 
+## Demo UI
+
+A minimal Streamlit UI is provided for demos. It is a thin presentation layer that
+invokes the deployed Amazon Bedrock AgentCore Runtime — it performs no search,
+ranking, or deduplication itself.
+
+Run it:
+
+```bash
+./scripts/run-ui.sh
+```
+
+The UI uses the standard AWS credential chain (environment, shared config/credentials,
+SSO, or an IAM role) and can be configured with `AWS_REGION` and
+`AGENTCORE_RUNTIME_ARN` (both default to the deployed Community Scout Runtime in
+`us-east-1`). Install the UI dependencies with
+`pip install -r requirements.txt -r requirements-ui.txt`.
+
+Request path:
+
+```text
+Streamlit UI
+  → AgentCore Runtime
+    → Strands + Claude Sonnet 4.6
+      → AgentCore Gateway
+        → Web Search
+          → Meetup / Luma
+```
+
 ## Roadmap
 
 - v0.1 - Project Foundation

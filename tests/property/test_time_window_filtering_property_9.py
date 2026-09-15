@@ -136,7 +136,10 @@ def scenario(draw):
     from its actual event date: in-window events get an out-of-window publishedDate,
     and out-of-window events get an in-window publishedDate.
     """
-    topics = draw(valid_topics())
+    # Use a fixed, real requested topic and embed its keyword in every snippet
+    # (below) so the deterministic topic-relevance gate always passes — this
+    # property isolates TIME-WINDOW filtering, not topic gating.
+    topics = ["AWS"]
     start_date, end_date = draw(time_window())
     dates, in_window_set = draw(
         event_dates_around_window(start_date=start_date, end_date=end_date)
@@ -156,7 +159,7 @@ def scenario(draw):
         # end-datetime extraction does not pick up a second date.
         snippet = (
             f"Join us in Austin, Texas on {_iso_datetime(event_date)} "
-            f"for a great community meetup."
+            f"for a great AWS community meetup."
         )
 
         # publishedDate deliberately on the opposite side of the window.
@@ -168,7 +171,7 @@ def scenario(draw):
 
         raw_results.append(
             {
-                "title": f"Austin Tech Event {i}",
+                "title": f"Austin AWS Tech Event {i}",
                 "url": url,
                 "snippet": snippet,
                 "publishedDate": published,

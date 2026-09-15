@@ -145,9 +145,11 @@ def _build_mocked_web_search_results():
     #   2. url_ai    — matches one topic (Agentic AI), starts day+20.
     #   3. url_aws   — matches one topic (AWS), starts day+40 (later than url_ai;
     #                  url_ai also has a higher recency score since it is sooner).
-    #   4. url_none  — matches no topic (score 0).
-    # url_out is dropped entirely by the time-window post-filter.
-    expected_order = [url_both, url_ai, url_aws, url_none]
+    # url_none ("Austin Board Game Night") is dropped by the deterministic topic-
+    # relevance gate: its own evidence contains no requested-topic signal, so it is a
+    # false positive and never becomes a CommonEvent. url_out is dropped by the
+    # time-window post-filter.
+    expected_order = [url_both, url_ai, url_aws]
     return raw_results, expected_order
 
 
@@ -204,8 +206,9 @@ def test_end_to_end_pipeline_ranks_events_in_expected_order_with_unmodified_urls
 
     deduplicated = deduplicate(events)
 
-    # The out-of-window event is filtered by the source; four events remain and
-    # there are no duplicates in this scenario.
+    # The out-of-window event is filtered by the time-window post-filter and the
+    # off-topic "Board Game Night" is filtered by the topic-relevance gate; the
+    # remaining on-topic, in-window events survive with no duplicates in this scenario.
     assert len(deduplicated) == len(expected_order), (
         f"expected {len(expected_order)} events after dedup, got {len(deduplicated)}"
     )
@@ -232,34 +235,37 @@ def test_end_to_end_pipeline_ranks_events_in_expected_order_with_unmodified_urls
     assert scores == sorted(scores, reverse=True), (
         f"ranked scores are not sorted descending: {scores}"
     )
-    # The two-topic match must outscore every single-topic match, which in turn
-    # must outscore the no-match event. The no-match event ranks last even though
-    # it has the nearest start date, because it earns zero topic score (its score
-    # is purely the recency component) while the topic-matching events do not.
+    # The two-topic match must outscore every single-topic match. All ranked events
+    # matched at least one topic (off-topic events are removed by the topic gate before
+    # ranking), and the last-ranked event is the lowest-scoring single-topic match.
     assert scores[0] > scores[1], "two-topic event should outscore single-topic events"
     last_ranked = ranked[-1]
     assert last_ranked.event.event_url == expected_order[-1]
-    # Its full score comes from recency alone (topic_score == 0), so it stays below
-    # every event that matched at least one topic (each earning >= 40 topic points).
-    assert last_ranked.relevance_score < 40.0, (
-        "the no-topic-match event should rank below topic-matching events"
+    # The last-ranked event is a legitimate single-topic (AWS) match — it still ranks
+    # below the two-topic match at the top.
+    assert last_ranked.relevance_score < scores[0], (
+        "the lowest single-topic match should rank below the two-topic match"
     )
 
     # --- Format response ---------------------------------------------------- #
     response = format_response(ranked, context, errors)
 
     # Header reports the post-deduplication count.
-    assert "Found 4 events in Austin, Texas:" in response
+    assert "Found 3 events in Austin, Texas:" in response
 
-    # (Req 10.4 / URL immutability) Every source URL appears byte-for-byte in the
-    # rendered response, as a markdown hyperlink, and the dropped out-of-window
-    # URL never appears.
+    # (Req 10.4 / URL immutability) Every surviving source URL appears byte-for-byte in
+    # the rendered response as a markdown hyperlink. Both dropped URLs — the
+    # out-of-window event and the off-topic (topic-gated) event — never appear.
     for url in expected_order:
         assert url in response, f"event_url missing or altered in response: {url!r}"
-    dropped_url = next(u for u in original_urls if u not in expected_order)
-    assert dropped_url not in response, (
-        "out-of-window event leaked into the response"
+    dropped_urls = [u for u in original_urls if u not in expected_order]
+    assert len(dropped_urls) == 2, (
+        f"expected 2 dropped URLs (out-of-window + off-topic), got {dropped_urls}"
     )
+    for dropped_url in dropped_urls:
+        assert dropped_url not in response, (
+            f"a filtered event leaked into the response: {dropped_url!r}"
+        )
 
     # The two matching events render their exact URLs inside markdown links.
     assert f"]({expected_order[0]})" in response

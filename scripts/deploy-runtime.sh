@@ -30,7 +30,9 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 STACK_NAME="${STACK_NAME:-community-scout-runtime}"
 TEMPLATE="${PROJECT_ROOT}/infra/cloudformation/runtime.yaml"
 ZIP_PATH="${PROJECT_ROOT}/dist/community-scout-runtime.zip"
-CODE_S3_KEY="community-scout-runtime.zip"
+# CODE_S3_KEY is intentionally NOT fixed here — a unique, immutable key is generated
+# per deployment AFTER packaging (see step 1) so CloudFormation always sees a changed
+# CodeConfiguration and creates a new AgentCore Runtime version.
 
 GATEWAY_URL="${GATEWAY_URL:-https://community-scout-gateway-ulm0mt55tz.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp}"
 BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID:-us.anthropic.claude-sonnet-4-6}"
@@ -53,6 +55,15 @@ if [[ ! -f "${ZIP_PATH}" ]]; then
   echo "ERROR: expected artifact not found at ${ZIP_PATH}" >&2
   exit 1
 fi
+
+# Generate a UNIQUE, IMMUTABLE S3 key per deployment so CloudFormation detects a
+# CodeConfiguration change and creates a new AgentCore Runtime version. We combine the
+# current git commit SHA with a UTC timestamp — the timestamp guarantees uniqueness even
+# when there are uncommitted changes (same SHA) or the repo is not a git checkout.
+GIT_SHA="$(git -C "${PROJECT_ROOT}" rev-parse --short HEAD 2>/dev/null || echo nogit)"
+BUILD_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+CODE_S3_KEY="community-scout-runtime/${GIT_SHA}-${BUILD_TIMESTAMP}.zip"
+echo ">> CodeS3Key       : ${CODE_S3_KEY}"
 
 # --- 2) Ensure the artifact bucket exists ----------------------------------- #
 echo ">> [2/5] Ensuring S3 artifact bucket exists..."
