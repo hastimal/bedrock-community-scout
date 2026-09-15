@@ -4,7 +4,7 @@
 
 The AI Community Scout is an agentic AI application that helps technology professionals discover upcoming technology community events — including meetups, tech talks, and community gatherings — within a specified geographic area and time window.
 
-For the MVP, the Scout accepts a natural-language query from a user, interprets the topics and location of interest, fetches live event data from Meetup and Luma, normalizes the results into a common event model, ranks them by relevance to the query, and returns a deduplicated list with direct links to the original event pages.
+For the v0.1 MVP, the Scout accepts a natural-language query from a user, interprets the topics of interest, and uses the Amazon Bedrock AgentCore Web Search Tool — with domain filters scoped to meetup.com and lu.ma — to retrieve publicly indexed event pages for Austin, Texas. The LLM extracts event data from the returned snippets, which is then normalized into a common event model, deduplicated, ranked by relevance, and returned as a list with links to the original source pages. No API keys, OAuth credentials, or third-party integrations are required. The architecture is extensible: additional sources can be added by expanding the domain filter list.
 
 The system is constrained to facts returned by the event-source tools. It must never fabricate events, dates, locations, or URLs.
 
@@ -14,18 +14,18 @@ The system is constrained to facts returned by the event-source tools. It must n
 
 - **Scout**: The top-level agentic AI system that orchestrates the end-to-end community event discovery workflow.
 - **User**: A technology professional who submits a natural-language query to the Scout.
-- **Query**: A natural-language request that specifies one or more topics of interest, one or more geographic locations, and an optional time window.
-- **Event_Source_Tool**: A modular, independently invokable tool that fetches event data from a single external platform (Meetup or Luma) and returns results conforming to the Common_Event_Model.
-- **Meetup_Tool**: The Event_Source_Tool that retrieves event data from the Meetup platform.
-- **Luma_Tool**: The Event_Source_Tool that retrieves event data from the Luma platform.
+- **Query**: A natural-language request that specifies one or more topics of interest and an optional time window. For v0.1, the location is fixed to Austin, Texas and need not be specified by the User.
+- **Event_Source_Tool**: A modular, independently invokable tool that fetches event data and returns results conforming to the Common_Event_Model. In v0.1 the only active source is `AgentCoreWebSearchEventSource`; the interface is designed to accommodate additional tools in future versions.
+- **AgentCoreWebSearchEventSource**: The single Event_Source_Tool implementation for v0.1. It invokes the Amazon Bedrock AgentCore Web Search Tool with a domain filter of `{include: ['meetup.com', 'lu.ma']}`, targeting publicly indexed event pages on both platforms. All domain configuration is isolated inside this component.
+- **AgentCore_Web_Search_Tool**: The fully managed, MCP-compliant web search capability built into Amazon Bedrock AgentCore. Returns ranked snippets, source URLs, titles, and publication dates from Amazon's web index. No external API key or credential is required.
 - **Common_Event_Model**: The normalized data structure that every Event_Source_Tool must populate and that the Scout uses for ranking and response generation.
 - **Ranker**: The Scout sub-component that scores and orders events by their relevance to the User's Query.
 - **Response_Generator**: The Scout sub-component that formats the ranked event list into a human-readable reply.
 - **Bedrock_Agent**: The Amazon Bedrock AgentCore-hosted runtime that executes the Scout's agentic workflow.
 - **Topic**: A technology subject or keyword extracted from the Query (e.g., "Agentic AI", "AWS", "Kubernetes").
-- **Location**: A city or metropolitan area extracted from the Query (e.g., "Austin", "Houston").
+- **Location**: A city or metropolitan area. For v0.1, the Location is fixed to Austin, Texas.
 - **Time_Window**: The future date range extracted from the Query, defaulting to 90 days from the current date when not explicitly stated.
-- **Relevance_Score**: A numeric value computed by the Ranker that reflects how closely an event matches the Topics and Location in the Query.
+- **Relevance_Score**: A numeric value computed by the Ranker in the range 0–100 that reflects how closely an event matches the Topics in the Query and how soon it occurs. Location is not scored in v0.1 because every accepted event is already in Austin, Texas.
 - **Event_URL**: The canonical, unmodified URL of an event as returned by the originating Event_Source_Tool.
 - **Deduplication**: The process of identifying and removing duplicate events that appear in results from more than one Event_Source_Tool.
 
@@ -40,10 +40,10 @@ The system is constrained to facts returned by the event-source tools. It must n
 #### Acceptance Criteria
 
 1. WHEN a User submits a Query, THE Scout SHALL extract one or more Topics from the Query.
-2. WHEN a User submits a Query, THE Scout SHALL extract one or more Locations from the Query.
+2. WHEN a User submits a Query, THE Scout SHALL use Austin, Texas as the fixed Location for v0.1; the Scout SHALL NOT require the User to specify a location.
 3. WHEN a User submits a Query that contains an explicit time range — whether expressed as absolute dates or relative expressions such as "next 30 days" or "next month" — THE Scout SHALL use that range as the Time_Window, provided the range does not exceed 5 years from the current date.
 4. WHEN a User submits a Query that does not contain an explicit time range, THE Scout SHALL default the Time_Window to 90 calendar days starting from the current date.
-5. IF the Scout cannot extract at least one Topic and at least one Location from a Query, THEN THE Scout SHALL return a clarification message that identifies which missing component(s) — topic, location, or both — the User needs to supply.
+5. IF the Scout cannot extract at least one Topic from a Query, THEN THE Scout SHALL return a clarification message identifying that a topic is needed.
 6. IF a User submits a Query that contains no extractable tokens (e.g., an empty string or only whitespace), THEN THE Scout SHALL return an error message before attempting any extraction.
 
 ---
@@ -54,41 +54,37 @@ The system is constrained to facts returned by the event-source tools. It must n
 
 #### Acceptance Criteria
 
-1. THE Scout SHALL invoke each Event_Source_Tool independently via a defined tool interface that accepts one or more Topics (each 1–200 characters), one or more Locations (each 1–200 characters), and a Time_Window (1–90 days), and returns a list of zero or more Common_Event_Model records.
-2. THE Meetup_Tool SHALL implement the Event_Source_Tool interface.
-3. THE Luma_Tool SHALL implement the Event_Source_Tool interface.
-4. WHEN a new Event_Source_Tool is registered with the Scout, THE Scout SHALL invoke it using the same tool interface as existing Event_Source_Tools and include its returned results in the aggregated event set alongside results from other tools.
-5. IF an Event_Source_Tool does not respond within 10 seconds or returns an error response, THEN THE Scout SHALL record an error entry containing the tool name and the failure reason, exclude that tool's results from the response, and continue processing results from the remaining Event_Source_Tools.
+1. THE Scout SHALL invoke each Event_Source_Tool independently via a defined tool interface that accepts one or more Topics (each 1–200 characters) and a Time_Window (1–90 days), and returns a list of zero or more Common_Event_Model records. The Location is fixed to Austin, Texas in v0.1 and is not a caller-supplied parameter.
+2. THE AgentCoreWebSearchEventSource SHALL implement the Event_Source_Tool interface for v0.1, using the AgentCore Web Search Tool with domain filters scoped to meetup.com and lu.ma.
+3. WHEN a new Event_Source_Tool is registered with the Scout, THE Scout SHALL invoke it using the same tool interface as existing Event_Source_Tools and include its returned results in the aggregated event set alongside results from other tools.
+4. IF an Event_Source_Tool does not respond within 10 seconds or returns an error response, THEN THE Scout SHALL record an error entry containing the tool name and the failure reason, exclude that tool's results from the response, and continue processing results from the remaining Event_Source_Tools.
 
 ---
 
-### Requirement 3: Meetup Event Retrieval
+### Requirement 3: AgentCore Web Search Event Retrieval
 
-**User Story:** As a User, I want events from Meetup included in my results, so that I can discover locally organized tech meetups.
+**User Story:** As a User, I want events from meetup.com and lu.ma included in my results, so that I can discover tech events in Austin from multiple platforms without any API credentials or platform-specific integrations.
 
 #### Acceptance Criteria
 
-1. WHEN invoked with a Topic, Location, and Time_Window, THE Meetup_Tool SHALL query the Meetup platform for events matching those parameters.
-2. THE Meetup_Tool SHALL return only events whose start date falls on or after the first day of the Time_Window and on or before the last day of the Time_Window.
-3. THE Meetup_Tool SHALL return only events whose city matches the city specified in the Location parameter.
-4. THE Meetup_Tool SHALL populate the Event_URL field of each Common_Event_Model record with the unmodified URL provided by the Meetup platform.
-5. IF the Meetup platform returns no events for the given parameters, THEN THE Meetup_Tool SHALL return an empty list.
-6. IF the Meetup platform is unreachable or returns an error response, THEN THE Meetup_Tool SHALL return an error to the Scout indicating that the Meetup platform is unavailable, without returning any partial event records.
+1. WHEN invoked with one or more Topics and a Time_Window, THE AgentCoreWebSearchEventSource SHALL invoke the Amazon Bedrock AgentCore Web Search Tool with a query constructed from the Topics and Austin, Texas, and a domain filter set to `{"include": ["meetup.com", "lu.ma"]}`.
+2. THE AgentCoreWebSearchEventSource SHALL embed the Time_Window in the search query text (e.g., 'events in Austin Texas between {start_date} and {end_date}') so that the Web Search Tool can return relevant pages; THE AgentCoreWebSearchEventSource SHALL then post-filter the extracted results by the verified event start date, retaining only events whose start date falls within the Time_Window. The page publication date SHALL NOT be used as a substitute for the event start date.
+3. THE AgentCoreWebSearchEventSource SHALL extract event title, event date, city, source platform name, and Event_URL from each snippet returned by the Web Search Tool using only facts explicitly present in the snippet text and its source URL. IF any required field (title, event date, city, or Event_URL) cannot be reliably extracted from the evidence, THEN THE AgentCoreWebSearchEventSource SHALL exclude that result and not fabricate, infer, or substitute the missing field.
+4. THE AgentCoreWebSearchEventSource SHALL populate the Event_URL field of each Common_Event_Model record with the unmodified source URL returned by the Web Search Tool.
+5. THE AgentCoreWebSearchEventSource SHALL return only events whose extracted start date falls within the Time_Window.
+6. IF the Web Search Tool returns no results for the given query and domain filter, THEN THE AgentCoreWebSearchEventSource SHALL return an empty list.
+7. IF the Web Search Tool returns an error or is unavailable, THEN THE AgentCoreWebSearchEventSource SHALL return a ToolError to the Scout without returning any partial event records.
+8. THE AgentCoreWebSearchEventSource SHALL isolate the Web Search Tool endpoint, domain filter configuration, query construction, and snippet parsing logic within the AgentCoreWebSearchEventSource class so that they can be changed (e.g., adding new domains) without modifying any other component.
 
 ---
 
-### Requirement 4: Luma Event Retrieval
+### Requirement 4: Future Event Source Integration
 
-**User Story:** As a User, I want events from Luma included in my results, so that I can discover tech events hosted on that platform.
+**User Story:** As a developer, I want to add new event sources in future versions, so that users can discover events from additional platforms without requiring changes to the core Scout logic.
 
 #### Acceptance Criteria
 
-1. WHEN invoked with a Topic, Location, and Time_Window, THE Luma_Tool SHALL query the Luma platform using the Topic as a search keyword and the Location and Time_Window as filters.
-2. IF an event's start date falls on or after the first day of the Time_Window and on or before the last day of the Time_Window, THEN THE Luma_Tool SHALL include that event in the returned list.
-3. IF an event's city matches the city specified in the Location parameter, THEN THE Luma_Tool SHALL include that event in the returned list.
-4. THE Luma_Tool SHALL populate the Event_URL field of each Common_Event_Model record with the unmodified URL provided by the Luma platform.
-5. IF the Luma platform returns no events for the given parameters, THEN THE Luma_Tool SHALL return an empty list.
-6. IF the Luma platform is unreachable or returns an error response, THEN THE Luma_Tool SHALL return an error to the Scout indicating that the Luma platform is unavailable, without returning any partial event records.
+1. WHEN a new Event_Source_Tool is implemented (e.g., MeetupEventSource, EventbriteEventSource), THE Scout SHALL invoke it using the same EventSourceTool Protocol interface defined in Requirement 2, without modifying the normalizer, deduplicator, ranker, or response generator.
 
 ---
 
@@ -98,7 +94,21 @@ The system is constrained to facts returned by the event-source tools. It must n
 
 #### Acceptance Criteria
 
-1. THE Common_Event_Model SHALL contain the following fields: event title (required), event description (required), event start date and time in UTC (required), event end date and time in UTC (optional), location name (required), city (required), source platform name (required), and Event_URL (required).
+1. THE Common_Event_Model SHALL contain the following fields:
+
+   **Required fields:**
+   - event title
+   - event start date and time in UTC
+   - city
+   - source platform name
+   - Event_URL
+
+   **Optional fields:**
+   - event description
+   - event end date and time in UTC
+   - location name
+
+   IF a source platform does not provide a value for any required field, THE Event_Source_Tool SHALL exclude that event from the output. IF a source platform does not provide a value for an optional field, THE Event_Source_Tool SHALL set that field to null.
 2. WHEN an Event_Source_Tool returns an event, THE Event_Source_Tool SHALL populate all required Common_Event_Model fields using only data returned by the source platform.
 3. IF a source platform does not provide a value for an optional Common_Event_Model field, THEN THE Event_Source_Tool SHALL set that field to null.
 4. THE Scout SHALL NOT modify the Event_URL field of any Common_Event_Model record after it has been populated by an Event_Source_Tool.
@@ -127,8 +137,8 @@ The system is constrained to facts returned by the event-source tools. It must n
 #### Acceptance Criteria
 
 1. WHEN the Scout has collected and deduplicated event results, THE Ranker SHALL assign a Relevance_Score in the range 0 to 100 to each event.
-2. THE Ranker SHALL compute the Relevance_Score as a weighted sum: topic match contributes up to 60 points based on the number of Topics extracted from the Query that appear in the event title or description divided by the total number of extracted Topics, location match contributes 20 points if the event city matches a Location extracted from the Query, and recency contributes up to 20 points inversely proportional to the number of days between the current date and the event start date, capped at 0 for events more than 365 days away.
-3. IF no Topics and no Location are extracted from the Query, THEN THE Ranker SHALL assign a Relevance_Score of 0 to all events.
+2. THE Ranker SHALL compute the Relevance_Score as a weighted sum: topic match contributes up to 80 points based on the number of Topics extracted from the Query that appear in the event title or description divided by the total number of extracted Topics, and recency contributes up to 20 points inversely proportional to the number of days between the current date and the event start date, capped at 0 for events more than 365 days away. Location is not scored in v0.1 because every accepted event is already in Austin, Texas.
+3. IF no Topics are extracted from the Query, THEN THE Ranker SHALL assign a Relevance_Score of 0 to all events.
 4. THE Scout SHALL return events ordered from highest Relevance_Score to lowest Relevance_Score.
 5. WHEN two events have equal Relevance_Scores, THE Scout SHALL order them by ascending start date.
 
@@ -143,7 +153,7 @@ The system is constrained to facts returned by the event-source tools. It must n
 1. WHEN the Scout has ranked events, THE Response_Generator SHALL produce a response that includes, for each event: the event title, the source platform name, the city, the start date formatted as YYYY-MM-DD, and the Event_URL rendered as a markdown hyperlink; if a required display field is absent from an event record, THE Response_Generator SHALL display "N/A" for that field.
 2. THE Response_Generator SHALL present events in the ranked order determined by the Ranker.
 3. THE Response_Generator SHALL include a count of total events returned, calculated after deduplication, at the top of the response.
-4. IF the combined results from all Event_Source_Tools contain zero events after deduplication, THEN THE Response_Generator SHALL inform the User that no events were found for the specified Topics, Locations, and Time_Window, and suggest broadening the search criteria.
+4. IF the combined results from all Event_Source_Tools contain zero events after deduplication, THEN THE Response_Generator SHALL inform the User that no events were found for the specified Topics and Time_Window in Austin, Texas, and suggest broadening the search criteria.
 5. THE Response_Generator SHALL NOT add, modify, or omit any Event_URL from the events returned by the Event_Source_Tools.
 
 ---
@@ -154,8 +164,13 @@ The system is constrained to facts returned by the event-source tools. It must n
 
 #### Acceptance Criteria
 
-1. THE Scout SHALL NOT generate, infer, or hallucinate any event title, event description, event date, event location, or Event_URL that was not returned by an Event_Source_Tool.
-2. WHEN an Event_Source_Tool returns an event, THE Scout SHALL preserve the event title, event description, event date, event location, and Event_URL exactly as provided by the source platform.
+1. THE Scout SHALL NOT generate, infer, or hallucinate any event title, event description, event date, event location, venue, or Event_URL that was not explicitly present in the evidence returned by an Event_Source_Tool. IF a required field cannot be reliably extracted from the evidence, THE Scout SHALL exclude that result rather than inferring or substituting a value.
+2. WHEN an Event_Source_Tool returns an event, THE Scout SHALL preserve all event facts exactly as provided by the source platform, with the following deterministic normalizations permitted:
+   - Convert event date and time to ISO 8601 UTC format
+   - Normalize whitespace (leading/trailing whitespace removal, collapsing internal whitespace)
+   - Derive source platform name from the source URL domain (e.g., "meetup.com" → "Meetup", "lu.ma" → "Luma")
+   
+   The event_url field SHALL always remain byte-for-byte unchanged.
 3. IF no Event_Source_Tool returns results for a given Query, THEN THE Scout SHALL display a message to the User indicating that no events were found for that Query, without generating any placeholder or fabricated event records.
 
 ---
@@ -170,20 +185,19 @@ The system is constrained to facts returned by the event-source tools. It must n
 2. THE Bedrock_Agent SHALL invoke Event_Source_Tools as Bedrock AgentCore tool actions.
 3. THE Bedrock_Agent SHALL use an Amazon Bedrock foundation model to perform Query interpretation and Response_Generator formatting, and SHALL use the Ranker to perform Relevance_Score computation.
 4. WHEN the Bedrock_Agent receives a Query, THE Bedrock_Agent SHALL complete the full discovery workflow — tool invocation, normalization, deduplication, ranking, and response generation — within a single agentic session not exceeding 120 seconds.
-5. IF the Amazon Bedrock AgentCore runtime returns an error for a tool invocation, THEN THE Bedrock_Agent SHALL follow the error handling behavior defined in Requirement 2, Acceptance Criterion 5.
+5. IF the Amazon Bedrock AgentCore runtime returns an error for a tool invocation, THEN THE Bedrock_Agent SHALL follow the error handling behavior defined in Requirement 2, Acceptance Criterion 4.
 6. IF the Amazon Bedrock AgentCore runtime fails to establish or maintain the agentic session, THEN THE Bedrock_Agent SHALL return an error message to the User indicating that the session could not be completed, without returning partial results.
 
 ---
 
-### Requirement 11: Multi-Location and Multi-Topic Query Support
+### Requirement 11: Multi-Topic Query Support
 
-**User Story:** As a User, I want to search across multiple cities and topics in a single query, so that I can compare opportunities across locations without submitting separate queries.
+**User Story:** As a User, I want to search across multiple topics in a single query, so that I can discover events covering any of my interests without submitting separate queries.
 
 #### Acceptance Criteria
 
-1. WHEN a Query contains more than one Location, THE Scout SHALL invoke each Event_Source_Tool once per Location and aggregate the results into a single deduplicated result set before ranking.
-2. WHEN a Query contains more than one Topic, THE Scout SHALL pass all Topics to each Event_Source_Tool invocation so that results matching any of the Topics are included.
-3. THE Ranker SHALL assign a higher Relevance_Score to an event for each additional Topic from the Query it matches, such that an event matching N Topics receives a strictly higher score than an equivalent event matching fewer than N Topics.
-4. THE Response_Generator SHALL group results by Location when the Query contains more than one Location, presenting each Location as a distinct labeled section with its associated events listed within it.
-5. IF an Event_Source_Tool invocation fails for one or more Locations, THEN THE Scout SHALL include results from the successful Locations in the response and indicate which Locations could not be retrieved.
-6. IF a Query contains more than 5 Locations or more than 10 Topics, THEN THE Scout SHALL reject the Query and return an error message indicating the exceeded limit before invoking any Event_Source_Tool.
+1. WHEN a Query contains more than one Topic, THE Scout SHALL pass all Topics to the Event_Source_Tool invocation so that results matching any of the Topics are included.
+2. THE Ranker SHALL assign a higher Relevance_Score to an event for each additional Topic from the Query it matches, such that an event matching N Topics receives a strictly higher score than an equivalent event matching fewer than N Topics.
+3. THE Response_Generator SHALL list events sequentially in a single result list for the Austin, Texas location.
+4. IF the Event_Source_Tool invocation fails, THEN THE Scout SHALL indicate in the response that the source could not be retrieved.
+5. IF a Query contains more than 10 Topics, THEN THE Scout SHALL reject the Query and return an error message indicating the exceeded limit before invoking any Event_Source_Tool.

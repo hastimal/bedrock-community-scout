@@ -2,7 +2,7 @@
 
 ## Overview
 
-The AI Community Scout is an agentic application that helps technology professionals discover upcoming meetups and community events. A user submits a natural-language query describing topics of interest, one or more cities, and an optional time window. The Scout interprets the query, fetches live events from multiple platforms, normalizes them into a Common Event Model, deduplicates, ranks by relevance, and returns a readable, hyperlinked list — never fabricating any event, date, or URL.
+The AI Community Scout is an agentic application that helps technology professionals discover upcoming meetups and community events. A user submits a natural-language query describing topics of interest and an optional time window. The Scout interprets the query, uses the Amazon Bedrock AgentCore Web Search Tool — domain-filtered to meetup.com and lu.ma — to retrieve publicly indexed event pages (v0.1; extensible by expanding the domain filter list), extracts event data from the returned snippets, normalizes them into a Common Event Model, deduplicates, ranks by relevance, and returns a readable, hyperlinked list — never fabricating any event, date, or URL.
 
 **Key design goals:**
 - **Factual accuracy**: Every event in the response must originate from a live event-source tool. The LLM is responsible only for language understanding and response formatting, never for generating event facts.
@@ -21,27 +21,25 @@ sequenceDiagram
     participant User
     participant AgentCore as Bedrock AgentCore Runtime
     participant LLM as Bedrock Foundation Model
-    participant MeetupTool as Meetup Tool
-    participant LumaTool as Luma Tool
+    participant WebSearch as AgentCore Web Search Tool
     participant Ranker
     participant ResponseGen as Response Generator
 
     User->>AgentCore: Natural-language query
-    AgentCore->>LLM: Extract topics, locations, time window
-    LLM-->>AgentCore: {topics[], locations[], time_window}
+    AgentCore->>LLM: Extract topics and time window
+    LLM-->>AgentCore: {topics[], time_window}
 
-    loop For each Location
-        AgentCore->>MeetupTool: invoke(topics, location, time_window)
-        MeetupTool-->>AgentCore: CommonEvent[]
-        AgentCore->>LumaTool: invoke(topics, location, time_window)
-        LumaTool-->>AgentCore: CommonEvent[]
-    end
+    AgentCore->>WebSearch: search(query="{topics} events Austin {start}–{end}", domainFilter={include:["meetup.com","lu.ma"]})
+    WebSearch-->>AgentCore: snippets[] with source URLs (meetup.com + lu.ma results)
 
-    AgentCore->>AgentCore: Deduplicate events
+    AgentCore->>LLM: Extract CommonEvent[] from snippets
+    LLM-->>AgentCore: CommonEvent[]
+
+    AgentCore->>AgentCore: Normalize / Verify / Deduplicate
     AgentCore->>Ranker: score(events, topics, locations)
-    Ranker-->>AgentCore: events with relevance_score
+    Ranker-->>AgentCore: RankedEvent[]
     AgentCore->>ResponseGen: format(ranked_events, query_context)
-    ResponseGen-->>User: Human-readable ranked event list
+    ResponseGen-->>User: Human-readable ranked event list with original URLs
 ```
 
 ### Component Map
@@ -53,18 +51,16 @@ graph TD
 
     C --> D[Query Interpreter\nBedrock LLM]
     C --> E[Tool Dispatcher]
-    E --> F[Meetup Tool]
-    E --> G[Luma Tool]
+    E --> G[AgentCoreWebSearchEventSource\nmeetup.com + lu.ma]
     E --> H[Future Tool N]
 
-    F --> I[Event Aggregator]
-    G --> I
+    G --> I[Event Aggregator]
     H --> I
 
     I --> J[Deduplicator]
     J --> K[Ranker]
     K --> L[Response Generator\nBedrock LLM]
-    L --> M[User Response]
+    L --> M[User Response\nwith original URLs]
 
     style H stroke-dasharray: 5 5
 ```
@@ -76,8 +72,8 @@ graph TD
 | Agent Runtime | Amazon Bedrock AgentCore Runtime | Managed serverless compute, session isolation, built-in observability, no custom infra |
 | Agent Framework | Strands Agents | AWS-native, lightweight tool loop, compatible with AgentCore SDK `@app.entrypoint` pattern |
 | Foundation Model | Amazon Bedrock (configurable model ID) | Query interpretation and response formatting; model selected at deploy time via `BEDROCK_MODEL_ID` environment variable; defaults to `us.anthropic.claude-sonnet-4-20250514` |
-| Meetup Integration | Meetup GraphQL API (`/gql-ext`) | Supports keyword + location + date range queries; OAuth 2 bearer token auth |
-| Luma Integration | Luma Discover public API + Luma REST API | City-based public event discovery; REST API for calendar-managed events |
+| AgentCore Web Search | Amazon Bedrock AgentCore Web Search Tool (MCP) | Fully managed web search over Amazon's own index. No API keys or third-party credentials. Domain-filtered to meetup.com and lu.ma. Returns snippets + source URLs. $7/1K queries. |
+| Event Sources | meetup.com + lu.ma (public indexed pages) | Both platforms' public event pages are indexed and retrievable via the Web Search Tool domain filter. No platform-specific API or credential required. |
 | Language | Python 3.12 | Strong AWS SDK support, Strands SDK availability, rich data-processing ecosystem |
 | Testing | pytest + Hypothesis | Unit + property-based testing |
 
@@ -89,12 +85,11 @@ The Scout reads all tuneable values from environment variables at startup. No co
 
 | Environment Variable | Required | Default | Description |
 |---|---|---|---|
-| `BEDROCK_MODEL_ID` | No | `us.anthropic.claude-sonnet-4-20250514` | Amazon Bedrock model ID used for query interpretation and response formatting. Any Bedrock-supported model ID that supports tool use may be substituted (e.g. `us.amazon.nova-pro-v1:0`). |
+| `BEDROCK_MODEL_ID` | No | `us.anthropic.claude-sonnet-4-20250514` | Amazon Bedrock model ID for query interpretation and response formatting. Any Bedrock model ID supporting tool use may be substituted. |
 
 **Behaviour:**
-- If `BEDROCK_MODEL_ID` is not set, the Scout uses the default value shown above.
-- The model ID is read once at handler invocation time, so a rolling deployment can change the model without restarting the AgentCore runtime.
-- No other components (Ranker, Deduplicator, event-source tools) depend on this value; they are model-agnostic.
+- `BEDROCK_MODEL_ID` is read at handler invocation time; changing it does not require restarting the runtime.
+- No API keys, OAuth credentials, or external secrets are required for v0.1. The AgentCore Web Search Tool is a managed AWS service invoked within the AgentCore runtime — no outbound credentials leave the AWS environment.
 
 ---
 
@@ -108,7 +103,8 @@ The top-level entry point, hosted as a Bedrock AgentCore Runtime. It wraps a Str
 import os
 from bedrock_agentcore import BedrockAgentCoreApp
 from strands import Agent
-from tools import meetup_tool, luma_tool
+from strands.tools.mcp import MCPClient
+from tools import agentcore_web_search_event_source
 
 app = BedrockAgentCoreApp()
 
@@ -116,10 +112,10 @@ DEFAULT_MODEL_ID = "us.anthropic.claude-sonnet-4-20250514"
 
 SYSTEM_PROMPT = """
 You are the Community Scout. Given a user query:
-1. Extract topics, locations, and optional time window.
-2. Invoke event-source tools for each location.
-3. After receiving all tool results, pass them to the deduplicator, ranker, and response generator.
-4. NEVER invent, infer, or paraphrase any event title, date, location, or URL.
+1. Extract topics and optional time window. The location is fixed to Austin, Texas for v0.1.
+2. Invoke the AgentCoreWebSearchEventSource with the extracted topics, Austin as location, and the time window.
+3. Extract structured event data (title, date, city, URL) from the returned snippets.
+4. NEVER invent, infer, or fabricate any event title, date, location, or URL not present in the search results.
 5. If no events are found, say so clearly.
 """
 
@@ -130,7 +126,7 @@ async def handler(request):
     agent = Agent(
         model=model_id,
         system_prompt=SYSTEM_PROMPT,
-        tools=[meetup_tool, luma_tool]
+        tools=[agentcore_web_search_event_source]
     )
     async for event in agent.stream_async(prompt):
         yield event
@@ -150,7 +146,7 @@ Implemented by the Bedrock foundation model within the Scout's system prompt con
 ```json
 {
   "topics": ["Agentic AI", "AWS"],
-  "locations": ["Austin"],
+  "location": "Austin, Texas"  // fixed for v0.1
   "time_window": {
     "start_date": "2025-08-01",
     "end_date": "2025-10-30"
@@ -159,9 +155,9 @@ Implemented by the Bedrock foundation model within the Scout's system prompt con
 ```
 
 **Rules enforced via system prompt:**
-- If no topics or no locations can be extracted, request clarification and do not invoke any tools.
+- If no topics can be extracted, request clarification and do not invoke any tools.
 - Default time window: 90 calendar days from today.
-- Reject queries with more than 5 locations or more than 10 topics.
+- Reject queries with more than 10 topics.
 - Reject empty/whitespace-only queries.
 
 ### 3. Event Source Tool Interface
@@ -185,34 +181,21 @@ class EventSourceTool(Protocol):
 
 Each tool is decorated with `@tool` (Strands) so the LLM can invoke it by name with typed parameters. The tool must return either a list of `CommonEvent` records or a `ToolError`. It must respond within 10 seconds.
 
-### 4. Meetup Tool
+### 4. AgentCoreWebSearchEventSource
 
-Calls the Meetup GraphQL API (`POST https://api.meetup.com/gql-ext`) with OAuth 2 bearer token authentication. Queries `keywordSearch` for events matching the topic keywords within the city and date range.
+Implements the `EventSourceTool` Protocol. Internally invokes the Amazon Bedrock AgentCore Web Search Tool via MCP with a domain filter targeting meetup.com and lu.ma simultaneously. All Web Search Tool configuration — gateway URL, domain filter, query construction, date filter, and snippet parsing — is isolated within this class.
 
-**GraphQL query pattern:**
-```graphql
-query SearchEvents($query: String!, $city: String!, $startDate: DateTime!, $endDate: DateTime!) {
-  keywordSearch(
-    filter: {
-      query: $query
-      lat: null
-      lon: null
-      source: EVENTS
-    }
-    input: { first: 50 }
-  ) {
-    edges {
-      node {
-        result {
-          ... on Event {
-            id
-            title
-            description
-            dateTime
-            endTime
-            venue { city name }
-            eventUrl
-          }
+**Web Search Tool invocation:**
+```python
+{
+  "method": "tools/call",
+  "params": {
+    "name": "WebSearch",
+    "arguments": {
+      "query": "{topics} events in Austin Texas {start_date} to {end_date}",
+      "filters": {
+        "domainFilter": {
+          "include": ["meetup.com", "lu.ma"]
         }
       }
     }
@@ -220,36 +203,26 @@ query SearchEvents($query: String!, $city: String!, $startDate: DateTime!, $endD
 }
 ```
 
-**Post-filter:** Results are filtered in Python to the requested city (case-insensitive) and date range, because the Meetup GraphQL API performs keyword-based search and does not guarantee strict city/date filtering at the query level.
+**Time window handling:** The event time window is embedded in the query string, not passed as a `publishedDateFilter`. The publication date of a web page is not the same as the date of an event it describes. After the Web Search Tool returns snippets, `AgentCoreWebSearchEventSource` post-filters the extracted `CommonEvent` records by verified event start date, discarding any record whose start date is outside `[start_date, end_date]`.
 
-**Authentication:** OAuth 2 bearer token stored in AWS Secrets Manager; retrieved at tool initialization.
+**What the Web Search Tool returns:**
+Each result contains: `title`, `url`, `snippet` (semantically extracted passage), `publishedDate`. The LLM extracts structured event fields (title, event date, city, Event_URL) from these snippets using only facts explicitly stated in the snippet text or derivable from the source URL (e.g., platform name from domain). If any required field is absent or ambiguous in the evidence, the record is excluded — no inference or substitution is permitted.
 
-**Error handling:** Network timeouts or HTTP errors return a `ToolError` with the tool name and failure reason; no partial records are returned.
+**Authentication:** None required from the application. The AgentCore Web Search Tool is a managed AWS service — no external API keys, Bearer tokens, or third-party credentials leave the AWS environment.
 
-### 5. Luma Tool
+**Source coverage:** meetup.com and lu.ma public event pages are both included in Amazon's web index and returned together in a single search call. The domain filter ensures no results from other sources are included.
 
-Calls the Luma public Discover API to search for events by city and keyword. Luma's official REST API (`https://public-api.luma.com`) is calendar-scoped; for cross-calendar city-based discovery the tool uses the public Discover endpoint (`https://api.lu.ma/discover/events?city=<city>&query=<keyword>`).
+**Extensibility:** To add more event sources, add their domains to the `domainFilter.include` list inside `AgentCoreWebSearchEventSource`. No other component needs to change.
 
-**Request pattern:**
-```
-GET https://api.lu.ma/discover/events
-  ?city={city}
-  &query={topic}
-  &start_date={start_date}
-  &end_date={end_date}
-```
+**Error handling:** Returns `ToolError(tool_name='AgentCoreWebSearchEventSource', reason=...)` on Web Search Tool error or timeout; no partial records returned.
 
-Results are post-filtered in Python against the city and date window in the same manner as the Meetup Tool.
+**Pricing:** The AgentCore Web Search Tool is priced at $7 per 1,000 queries. New AWS accounts receive Free Tier credits.
 
-**Authentication:** None required for the public Discover endpoint. API key (`x-luma-api-key`) is used if the tool is extended to access managed calendar endpoints.
-
-**Error handling:** Same as Meetup Tool — returns `ToolError` on failure, no partial records.
-
-### 6. Event Aggregator
+### 5. Event Aggregator
 
 After all tool invocations complete, the Scout collects all returned `CommonEvent` lists and flattens them into a single list. Any `ToolError` entries are collected separately and surfaced in the response footer.
 
-### 7. Deduplicator
+### 6. Deduplicator
 
 Pure Python function with no external dependencies. Detects duplicate events across sources and retains the highest-confidence record.
 
@@ -259,28 +232,28 @@ Pure Python function with no external dependencies. Detects duplicate events acr
 3. Within each group, sort by `match_confidence DESC, source_invocation_order ASC`.
 4. Retain the first record in each group; discard the rest.
 
-### 8. Ranker
+### 7. Ranker
 
 Pure Python function implementing the deterministic weighted formula:
 
 ```
-relevance_score = topic_score + location_score + recency_score
+relevance_score = topic_score + recency_score
 
-topic_score    = (matched_topics / total_topics) * 60
-location_score = 20 if event.city in query_locations else 0
-recency_score  = max(0, 20 * (1 - days_until_event / 365))  # 0 if > 365 days away
+topic_score   = (matched_topics / total_topics) * 80
+recency_score = max(0, 20 * (1 - days_until_event / 365))  # 0 if > 365 days away
 ```
 
 Where:
 - `matched_topics` = count of query topics that appear (case-insensitive substring) in event title or description.
 - `days_until_event` = calendar days between today and event start date.
+- Location is not scored in v0.1 because every accepted event is already in Austin, Texas.
 - Final score is clamped to [0, 100].
 
 **Tie-breaking:** Events with equal scores are ordered by ascending start date.
 
-If no topics and no location were extracted, all events receive a score of 0 and are ordered by start date.
+If no topics were extracted, all events receive a score of 0 and are ordered by start date.
 
-### 9. Response Generator
+### 8. Response Generator
 
 Implemented by the Bedrock foundation model using a structured formatting prompt. Receives the ranked `CommonEvent` list and query context.
 
@@ -288,7 +261,7 @@ Implemented by the Bedrock foundation model using a structured formatting prompt
 - Display fields: event title, source platform, city, start date (YYYY-MM-DD), Event_URL as a markdown hyperlink.
 - Missing required display fields render as "N/A".
 - Total event count (after deduplication) appears at the top.
-- When the query contains multiple locations, events are grouped under labeled location sections.
+- Events are listed sequentially; location grouping is not applicable in v0.1 (fixed to Austin, Texas).
 - When no events are found, the response explains why and suggests broadening the query.
 - Event URLs must not be altered, summarized, or omitted.
 
@@ -304,22 +277,29 @@ from typing import Optional
 
 @dataclass
 class CommonEvent:
-    title: str                  # Required
-    description: str            # Required
-    start_datetime: str         # Required; ISO 8601 UTC, e.g. "2025-09-15T18:00:00Z"
-    end_datetime: Optional[str] # Optional; ISO 8601 UTC or null
-    location_name: str          # Required; venue or "Online"
-    city: str                   # Required
-    source_platform: str        # Required; "Meetup" | "Luma" | ...
-    event_url: str              # Required; unmodified URL from source platform
-    match_confidence: float     # Internal; 0.0–1.0, default 0.0 if not provided by source
-    source_invocation_order: int  # Internal; 0-based index of tool invocation
+    # Required fields (must be non-null and non-empty)
+    title: str                  # Event title
+    start_datetime: str         # ISO 8601 UTC, e.g. "2025-09-15T18:00:00Z"
+    city: str                   # City (Austin, Texas for v0.1)
+    source_platform: str        # "Meetup" | "Luma" | ... (derived from source URL domain)
+    event_url: str              # Unmodified source URL
+
+    # Optional fields
+    description: Optional[str]  # Event description or null
+    end_datetime: Optional[str] # ISO 8601 UTC or null
+    location_name: Optional[str] # Venue name or "Online" or null
+
+    # Internal fields
+    match_confidence: float     # 0.0–1.0, default 0.0 if not provided by source
+    source_invocation_order: int  # 0-based index of tool invocation
 ```
 
 **Invariants:**
-- `start_datetime` and `end_datetime` (when present) must be ISO 8601 UTC strings ending in `Z`.
-- `event_url` is immutable after population by the tool.
-- `title`, `description`, `location_name`, `city`, `source_platform`, `event_url` must be non-empty strings.
+- Required fields must be non-empty strings.
+- Optional fields may be null.
+- `start_datetime` and `end_datetime` (when non-null) must be ISO 8601 UTC strings ending in `Z`.
+- `event_url` is byte-for-byte immutable after population by the originating tool.
+- Deterministic normalizations permitted: ISO 8601 datetime conversion, whitespace normalization, source platform name derivation from URL domain.
 
 ### RankedEvent
 
@@ -345,7 +325,7 @@ class ToolError:
 @dataclass
 class QueryContext:
     topics: list[str]           # 1–10 items
-    locations: list[str]        # 1–5 items
+    location: str               # Fixed to "Austin, Texas" in v0.1
     start_date: str             # ISO 8601 date
     end_date: str               # ISO 8601 date
 ```
@@ -356,7 +336,7 @@ class QueryContext:
 # Input parameters (passed as JSON by AgentCore tool invocation)
 {
     "topics": ["string"],       # required, 1–10 items
-    "location": "string",       # required, single city
+    "location": "string",       # fixed to "Austin, Texas" in v0.1
     "start_date": "YYYY-MM-DD", # required
     "end_date": "YYYY-MM-DD"    # required
 }
@@ -376,7 +356,7 @@ class QueryContext:
 
 ### Property 1: Relevance Score Formula and Bounds
 
-*For any* `CommonEvent` and `QueryContext`, the `relevance_score` computed by the Ranker SHALL equal `topic_score + location_score + recency_score` where each component is computed per the weighted formula in the design, the result is clamped to [0, 100], and the final score lies in the closed interval [0, 100].
+*For any* `CommonEvent` and `QueryContext`, the `relevance_score` computed by the Ranker SHALL equal `topic_score + recency_score` where `topic_score` is in [0, 80] and `recency_score` is in [0, 20], the result is clamped to [0, 100], and the final score lies in the closed interval [0, 100]. Location is not a scoring component in v0.1.
 
 **Validates: Requirements 7.1, 7.2**
 
@@ -384,7 +364,7 @@ class QueryContext:
 
 ### Property 2: Topic Score Monotonicity
 
-*For any* two events A and B evaluated against the same `QueryContext`, if event A matches strictly more topics from the query than event B, then the Ranker SHALL assign event A a strictly higher `relevance_score` than event B, assuming all other scoring components (location, recency) are equal.
+*For any* two events A and B evaluated against the same `QueryContext`, if event A matches strictly more topics from the query than event B, then the Ranker SHALL assign event A a strictly higher `relevance_score` than event B, assuming recency is equal.
 
 **Validates: Requirements 7.2, 7.3, 11.3**
 
@@ -454,11 +434,11 @@ class QueryContext:
 
 ---
 
-### Property 11: Multi-Location Aggregation Completeness
+### Property 11: Tool Result Aggregation Completeness
 
-*For any* query with N locations where all tool invocations succeed, the pre-deduplication event set collected by the Scout SHALL equal the union of all `CommonEvent` lists returned by all tools across all N locations.
+*For any* set of Event_Source_Tool invocations where all invocations succeed, the pre-deduplication event set collected by the Scout SHALL equal the union of all `CommonEvent` lists returned by all tools.
 
-**Validates: Requirements 11.1**
+**Validates: Requirements 2.3**
 
 ---
 
@@ -478,8 +458,7 @@ When an event-source tool times out (>10 s) or returns an HTTP error:
 | Condition | Behavior |
 |---|---|
 | Empty or whitespace-only query | Return error before any extraction or tool call |
-| Cannot extract topic or location | Return clarification message identifying the missing component(s) |
-| More than 5 locations | Reject query with error message before invoking any tool |
+| Cannot extract topic | Return clarification message asking the user to specify a topic |
 | More than 10 topics | Reject query with error message before invoking any tool |
 | Time window > 5 years | Reject the specified range; use default 90-day window and inform user |
 
@@ -496,12 +475,6 @@ If the AgentCore runtime fails to establish or maintain the session:
 - Return an error message to the user.
 - Do not return partial results.
 
-### Partial Multi-Location Failure
-
-If tool invocations fail for one or more locations but succeed for others:
-- Include results from successful locations.
-- Indicate in the response which locations could not be retrieved.
-
 ---
 
 ## Testing Strategy
@@ -517,18 +490,16 @@ Unit tests focus on specific examples, edge cases, and integration points betwee
 - Title comparison is case-insensitive and whitespace-stripped.
 
 **Ranker:**
-- Event matching all topics, in the query location, starting tomorrow → score near 100.
-- Event matching no topics, wrong city, starting in 400 days → score = 0.
-- Event matching 1 of 2 topics, correct city, starting in 30 days → computed expected value.
-- Zero topics and zero locations extracted → all events score 0.
+- Event matching all topics, starting tomorrow → score near 100.
+- Event matching no topics, starting in 400 days → score = 0.
+- Event matching 1 of 2 topics, 30 days away → computed expected value.
+- Zero topics extracted → all events score 0.
 - Two events with equal scores → ordered by ascending start date.
 
 **Query Validation:**
 - Empty string → error, no tool invocation.
 - Whitespace-only string → error, no tool invocation.
 - Query with no discernible topic → clarification message for missing topic.
-- Query with no discernible location → clarification message for missing location.
-- Query with 6 locations → rejection error.
 - Query with 11 topics → rejection error.
 
 **CommonEvent Normalization:**
@@ -539,7 +510,6 @@ Unit tests focus on specific examples, edge cases, and integration points betwee
 
 **Response Generator:**
 - Missing display field → rendered as "N/A".
-- Multi-location query → output grouped by location with labels.
 - Zero events → user-facing "no events found" message with suggestions.
 - Event URLs appear unmodified as markdown hyperlinks.
 
@@ -551,7 +521,7 @@ Each test runs a minimum of 100 iterations. Tests are tagged with the design pro
 
 **Property 1 — Relevance Score Formula and Bounds:**
 Generate random `CommonEvent` instances and `QueryContext` values. Assert that `Ranker.score(event, context)` equals the manually computed `topic_score + location_score + recency_score`, is clamped to [0, 100], and lies in [0, 100].
-`# Feature: community-scout-austin, Property 1: score = clamped(topic_score + location_score + recency_score), result in [0,100]`
+`# Feature: community-scout-austin, Property 1: score = clamped(topic_score + recency_score), topic in [0,80], recency in [0,20], result in [0,100]`
 
 **Property 2 — Topic Score Monotonicity:**
 Generate a `QueryContext` with N topics and pairs of events where event A matches k+1 topics and event B matches k topics (all other components held equal). Assert `score(A) > score(B)` for all such pairs.
@@ -597,10 +567,9 @@ Generate N locations with random mock tool responses. Assert the pre-deduplicati
 
 Targeting behavior that requires the real or mocked AgentCore/Bedrock stack. Run with 1–3 representative examples.
 
-- End-to-end: submit a known query against mocked Meetup and Luma responses; assert ranked output matches expected structure.
-- AgentCore tool timeout: mock a tool that sleeps >10 s; assert the Scout returns a partial result with an error note.
-- Multi-location partial failure: mock one tool to fail; assert results from successful location are returned with a failure note for the other.
-- Zero results: mock both tools to return empty lists; assert user receives the "no events found" message.
+- End-to-end: submit a known query against mocked AgentCoreWebSearchEventSource responses (mocked Web Search Tool snippets for meetup.com and lu.ma events); assert ranked output contains correct events in expected order with unmodified source URLs.
+- AgentCore tool timeout: mock the Web Search Tool to time out; assert the Scout returns an error note without partial results and does not raise an exception.
+- Zero results: mock the Web Search Tool to return empty results; assert the user receives the "no events found" message with a count of 0 and suggestions.
 
 ### Test Pyramid Summary
 
