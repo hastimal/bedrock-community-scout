@@ -265,6 +265,12 @@ cat runtime-response.json
 
 ## Streamlit UI
 
+<p align="center">
+  <img src="docs/images/ai-community-scout-ui.png"
+       alt="Community Scout Streamlit UI"
+       width="100%">
+</p>
+
 ```bash
 pip install -r requirements.txt -r requirements-ui.txt
 ./scripts/run-ui.sh

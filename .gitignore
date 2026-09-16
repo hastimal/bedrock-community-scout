@@ -222,3 +222,5 @@ runtime-response.json
 # Hidden files
 .agents/
 .claude/
+.DS_Store
+*/.DS_Store/
